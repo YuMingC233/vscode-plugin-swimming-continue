@@ -6,16 +6,19 @@
   "publisher": "swimming",
   "icon": "128.png",
   "engines": {
-    "vscode": "^1.45.1"
+    "vscode": "^1.100.0"
   },
+  "packageManager": "pnpm@10.32.1",
   "categories": [
     "Other"
   ],
   "activationEvents": [
     "onCommand:extension.swimming.rewriteCode",
+    "onCommand:extension.swimming.shadowRewriteCode",
     "onCommand:extension.swimming.closeWriteCode",
     "onCommand:extension.swimming.pauseWriteCode",
-    "onCommand:extension.swimming.switchWriteMode"
+    "onCommand:extension.swimming.switchWriteMode",
+    "onCommand:extension.swimming.exitShadowRewrite"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -29,12 +32,20 @@
         "title": "Close Write Code"
       },
       {
+        "command": "extension.swimming.shadowRewriteCode",
+        "title": "Shadow Rewriting"
+      },
+      {
         "command": "extension.swimming.pauseWriteCode",
         "title": "Pause/Continue Write Code"
       },
       {
         "command": "extension.swimming.switchWriteMode",
         "title": "Switch Write Mode"
+      },
+      {
+        "command": "extension.swimming.exitShadowRewrite",
+        "title": "Exit Shadow Rewriting"
       }
     ],
     "menus": {
@@ -51,7 +62,17 @@
         },
         {
           "when": "editorFocus",
+          "command": "extension.swimming.shadowRewriteCode",
+          "group": "navigation"
+        },
+        {
+          "when": "editorFocus",
           "command": "extension.swimming.switchWriteMode",
+          "group": "navigation"
+        },
+        {
+          "when": "editorFocus && vscodePluginSwimming.shadowActive",
+          "command": "extension.swimming.exitShadowRewrite",
           "group": "navigation"
         }
       ]
@@ -66,6 +87,16 @@
         "command": "extension.swimming.pauseWriteCode",
         "key": "ctrl+alt+shift+p",
         "mac": "alt+cmd+shift+p"
+      },
+      {
+        "command": "extension.swimming.exitShadowRewrite",
+        "key": "escape",
+        "when": "editorTextFocus && vscodePluginSwimming.shadowActive"
+      },
+      {
+        "command": "extension.swimming.shadowDeleteLeft",
+        "key": "backspace",
+        "when": "editorTextFocus && vscodePluginSwimming.shadowActive"
       }
     ],
     "configuration": {
@@ -81,15 +112,20 @@
           "type": "string",
           "default": "once",
           "description": "重写模式(once/cycle)"
+        },
+        "vscodePluginSwimming.shadowRequireShiftForSymbols": {
+          "type": "boolean",
+          "default": true,
+          "description": "shadow Rewriting遇到符号时，是否要求先输入一个符号字符再映射"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "vsce:publish": "npx vsce package && npx vsce publish"
+    "vsce:publish": "pnpm exec vsce package && pnpm exec vsce publish"
   },
   "repository": {
     "url": "https://github.com/zy445566/vscode-plugin-swimming"
@@ -108,9 +144,9 @@
   },
   "homepage": "https://github.com/zy445566/vscode-plugin-swimming#readme",
   "devDependencies": {
-    "@types/node": "^16.18.23",
-    "@types/vscode": "1.45.1",
-    "@vscode/vsce": "^2.19.0",
-    "typescript": "^3.9.3"
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^2.32.0",
+    "typescript": "^5.8.2"
   }
 }
