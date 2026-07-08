@@ -15,14 +15,6 @@ const TYPE_COMMAND = 'type';
 const DEFAULT_TYPE_COMMAND = 'default:type';
 const SHADOW_CONTEXT = 'vscodePluginSwimming.shadowActive';
 const SHADOW_DELETE_LEFT_COMMAND = 'extension.swimming.shadowDeleteLeft';
-const AUTO_CLOSING_PAIRS: Record<string, string> = {
-    '(': ')',
-    '[': ']',
-    '{': '}',
-    '"': '"',
-    '\'': '\'',
-    '`': '`',
-};
 
 type RewriteSession = {
     beforeText: string;
@@ -146,14 +138,12 @@ function getSessionPosition(session: RewriteSession) {
     return new Position(session.line, session.character);
 }
 
-function setEditorCursor(textEditor: TextEditor, position: Position) {
-    textEditor.selection = new Selection(position, position);
+function getSessionStartPosition(session: RewriteSession) {
+    return new Position(session.initLine, session.initCharacter);
 }
 
-function syncSessionCursor(textEditor: TextEditor, session: RewriteSession) {
-    const activePosition = textEditor.selection.active;
-    session.line = activePosition.line;
-    session.character = activePosition.character;
+function setEditorCursor(textEditor: TextEditor, position: Position) {
+    textEditor.selection = new Selection(position, position);
 }
 
 function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
@@ -204,62 +194,38 @@ function isSymbolCharacter(text: string) {
     return text.length > 0 && !/^[\p{L}\p{N}_\s]$/u.test(text);
 }
 
-function getNextTargetCharacter(session: RewriteSession) {
-    if (session.index >= session.beforeText.length) {
+function getExpectedShadowPrefix(session: RewriteSession) {
+    return session.beforeText.slice(0, session.index);
+}
+
+function getShadowCursorOffset(textEditor: TextEditor, session: RewriteSession) {
+    return textEditor.document.offsetAt(getSessionPosition(session));
+}
+
+function getActualShadowPrefix(textEditor: TextEditor, session: RewriteSession) {
+    const startPosition = getSessionStartPosition(session);
+    const actualPosition = textEditor.selection.active;
+
+    if (textEditor.document.offsetAt(actualPosition) < textEditor.document.offsetAt(startPosition)) {
         return '';
     }
 
-    return session.beforeText[session.index];
+    return textEditor.document.getText(new Range(startPosition, actualPosition));
 }
 
-function canUseAutoClosingPair(session: RewriteSession) {
-    const nextCharacter = getNextTargetCharacter(session);
-    return nextCharacter in AUTO_CLOSING_PAIRS;
+function hasShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
+    const expectedPrefix = getExpectedShadowPrefix(session);
+    const actualPrefix = getActualShadowPrefix(textEditor, session);
+    return actualPrefix.startsWith(expectedPrefix) && actualPrefix.length > expectedPrefix.length;
 }
 
-function shouldStepOverClosingCharacter(textEditor: TextEditor, session: RewriteSession) {
-    const nextCharacter = getNextTargetCharacter(session);
-    const currentPosition = getSessionPosition(session);
-    const currentOffset = textEditor.document.offsetAt(currentPosition);
-    const lineEndOffset = textEditor.document.offsetAt(
-        textEditor.document.lineAt(currentPosition.line).range.end
-    );
-
-    if (!nextCharacter || currentOffset >= lineEndOffset) {
-        return false;
-    }
-
-    const nextDocumentCharacter = textEditor.document.getText(new Range(
-        currentPosition,
-        textEditor.document.positionAt(currentOffset + 1)
-    ));
-
-    return nextDocumentCharacter === nextCharacter
-        && Object.values(AUTO_CLOSING_PAIRS).includes(nextCharacter);
+function isShadowPrefixAligned(textEditor: TextEditor, session: RewriteSession) {
+    return getActualShadowPrefix(textEditor, session) === getExpectedShadowPrefix(session);
 }
 
-async function typeAutoClosingCharacter(textEditor: TextEditor, session: RewriteSession) {
-    const nextCharacter = getNextTargetCharacter(session);
-    if (!nextCharacter) {
-        return false;
-    }
-
-    await commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: nextCharacter });
-    session.index += 1;
-    syncSessionCursor(textEditor, session);
-    return true;
-}
-
-function stepOverClosingCharacter(textEditor: TextEditor, session: RewriteSession) {
-    const currentOffset = textEditor.document.offsetAt(getSessionPosition(session));
-    const nextPosition = textEditor.document.positionAt(currentOffset + 1);
-
-    session.index += 1;
-    session.line = nextPosition.line;
-    session.character = nextPosition.character;
-    setEditorCursor(textEditor, nextPosition);
-    revealCurrentPosition(textEditor, session);
-    return true;
+function canAdvanceShadowSession(textEditor: TextEditor, session: RewriteSession) {
+    return isShadowPrefixAligned(textEditor, session)
+        && textEditor.document.offsetAt(textEditor.selection.active) === getShadowCursorOffset(textEditor, session);
 }
 
 function deleteShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
@@ -301,6 +267,18 @@ function canShadowTypeAdvance(typedText: string, session: RewriteSession) {
     }
 
     return [...typedText].some((character) => isSymbolCharacter(character));
+}
+
+function showShadowOutOfSyncMessage(textEditor: TextEditor, session: RewriteSession) {
+    if (hasShadowOverflow(textEditor, session)) {
+        return window.showWarningMessage(
+            'shadow Rewriting detected extra characters. Press Backspace to clean them before continuing.'
+        );
+    }
+
+    return window.showWarningMessage(
+        'shadow Rewriting is out of sync with the target text. Stop and restart this session if needed.'
+    );
 }
 
 function rewriteCodeWithStartAndEnd({
@@ -495,19 +473,15 @@ async function handleShadowType(args: { text?: string }) {
         return;
     }
 
+    if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+        return showShadowOutOfSyncMessage(textEditor, shadowSession);
+    }
+
     if (!canShadowTypeAdvance(typedText, shadowSession)) {
         return;
     }
 
-    let isEdited = false;
-    if (shouldStepOverClosingCharacter(textEditor, shadowSession)) {
-        isEdited = stepOverClosingCharacter(textEditor, shadowSession);
-    } else if (canUseAutoClosingPair(shadowSession)) {
-        isEdited = await typeAutoClosingCharacter(textEditor, shadowSession);
-    } else {
-        isEdited = await writeNextTargetChunk(textEditor, shadowSession);
-    }
-
+    const isEdited = await writeNextTargetChunk(textEditor, shadowSession);
     if (!isEdited) {
         return;
     }
@@ -526,6 +500,10 @@ async function handleShadowDeleteLeft() {
 
     const shadowSession = shadowSessionMap.get(getEditorKey(textEditor));
     if (!shadowSession) {
+        return;
+    }
+
+    if (!hasShadowOverflow(textEditor, shadowSession)) {
         return;
     }
 
