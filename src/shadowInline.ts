@@ -10,6 +10,12 @@ export type ShadowCursor = {
     character: number;
 };
 
+export type ShadowGenericTypingPolicy = {
+    requiresManualProgression: boolean;
+    isExpectingLineBreak: boolean;
+    requiresManualIndentation: boolean;
+};
+
 export function advanceShadowSession(
     session: ShadowInlineSession,
     insertedText: string
@@ -52,4 +58,14 @@ export function isShadowPrefixAligned(
     actualPrefix: string
 ) {
     return actualPrefix === session.beforeText.slice(0, session.index);
+}
+
+export function canUseGenericShadowTyping(
+    policy: ShadowGenericTypingPolicy
+) {
+    if (!policy.requiresManualProgression) {
+        return true;
+    }
+
+    return !policy.isExpectingLineBreak && !policy.requiresManualIndentation;
 }

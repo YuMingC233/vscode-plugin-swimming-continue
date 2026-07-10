@@ -18,6 +18,7 @@ import {
 } from 'vscode';
 import {
     advanceShadowSession,
+    canUseGenericShadowTyping as canUseGenericShadowTypingPolicy,
     getCurrentShadowLineRemainder,
     getGhostTextForCursor,
     isShadowPrefixAligned as isTargetPrefixAligned,
@@ -398,32 +399,12 @@ function showShadowOutOfSyncMessage(textEditor: TextEditor, session: RewriteSess
     );
 }
 
-function showShadowManualKeyHint(textEditor: TextEditor, session: RewriteSession) {
-    if (getShadowRequireManualLineBreaksAndIndentation() && isExpectingLineBreak(session)) {
-        return window.showInformationMessage(
-            'shadow Rewriting is waiting for Enter to move to the next line.'
-        );
-    }
-
-    if (requiresManualIndentation(textEditor, session)) {
-        return window.showInformationMessage(
-            'shadow Rewriting is waiting for Tab to consume the next indentation block.'
-        );
-    }
-
-    return undefined;
-}
-
 function canUseGenericShadowTyping(textEditor: TextEditor, session: RewriteSession) {
-    if (!getShadowRequireManualLineBreaksAndIndentation()) {
-        return true;
-    }
-
-    if (isExpectingLineBreak(session)) {
-        return false;
-    }
-
-    return !requiresManualIndentation(textEditor, session);
+    return canUseGenericShadowTypingPolicy({
+        requiresManualProgression: getShadowRequireManualLineBreaksAndIndentation(),
+        isExpectingLineBreak: isExpectingLineBreak(session),
+        requiresManualIndentation: requiresManualIndentation(textEditor, session),
+    });
 }
 
 async function advanceShadowWithTypedInput(
@@ -431,14 +412,14 @@ async function advanceShadowWithTypedInput(
     shadowSession: RewriteSession,
     typedText: string
 ) {
-    // 两个提示框，仅仅辅助开发调试，生产环境隐藏
-    // if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-    //     return showShadowOutOfSyncMessage(textEditor, shadowSession);
-    // }
 
-    // if (!canUseGenericShadowTyping(textEditor, shadowSession)) {
-    //     return showShadowManualKeyHint(textEditor, shadowSession);
-    // }
+    if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+        return;
+    }
+
+    if (!canUseGenericShadowTyping(textEditor, shadowSession)) {
+        return;
+    }
 
     if (!canShadowTypeAdvance(typedText, shadowSession)) {
         return;

@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
     advanceShadowSession,
+    canUseGenericShadowTyping,
     getGhostTextForCursor,
     isShadowPrefixAligned,
 } = require('../out/shadowInline');
@@ -57,4 +58,31 @@ test('checks alignment against the session prefix instead of a stale editor sele
 
     assert.equal(isShadowPrefixAligned(session, 'first\n'), true);
     assert.equal(isShadowPrefixAligned(session, 'first'), false);
+});
+
+test('blocks generic typing while manual line breaks or indentation are required', () => {
+    assert.equal(
+        canUseGenericShadowTyping({
+            requiresManualProgression: true,
+            isExpectingLineBreak: true,
+            requiresManualIndentation: false,
+        }),
+        false
+    );
+    assert.equal(
+        canUseGenericShadowTyping({
+            requiresManualProgression: true,
+            isExpectingLineBreak: false,
+            requiresManualIndentation: true,
+        }),
+        false
+    );
+    assert.equal(
+        canUseGenericShadowTyping({
+            requiresManualProgression: true,
+            isExpectingLineBreak: false,
+            requiresManualIndentation: false,
+        }),
+        true
+    );
 });
