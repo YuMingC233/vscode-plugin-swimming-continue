@@ -1,20 +1,35 @@
 import {
+    CancellationToken,
     commands,
     ExtensionContext,
+    InlineCompletionContext,
+    InlineCompletionItem,
+    InlineCompletionItemProvider,
+    languages,
     Position,
     Range,
     Selection,
     TextEditor,
     TextEditorEdit,
     TextEditorRevealType,
+    TextDocument,
     window,
     workspace,
 } from 'vscode';
+import {
+    advanceShadowSession,
+    getCurrentShadowLineRemainder,
+    getGhostTextForCursor,
+} from './shadowInline';
 
 const TYPE_COMMAND = 'type';
 const DEFAULT_TYPE_COMMAND = 'default:type';
 const SHADOW_CONTEXT = 'vscodePluginSwimming.shadowActive';
 const SHADOW_DELETE_LEFT_COMMAND = 'extension.swimming.shadowDeleteLeft';
+const SHADOW_ENTER_COMMAND = 'extension.swimming.shadowEnter';
+const SHADOW_TAB_COMMAND = 'extension.swimming.shadowTab';
+const INLINE_SUGGEST_TRIGGER_COMMAND = 'editor.action.inlineSuggest.trigger';
+const INLINE_SUGGEST_HIDE_COMMAND = 'editor.action.inlineSuggest.hide';
 
 type RewriteSession = {
     beforeText: string;
@@ -39,6 +54,22 @@ function getShadowRequireSymbolKey() {
         .get<boolean>('vscodePluginSwimming.shadowRequireShiftForSymbols');
 
     return typeof requireSymbolKey === 'boolean' ? requireSymbolKey : true;
+}
+
+function getShadowShowInlineSuggestion() {
+    const showInlineSuggestion = workspace
+        .getConfiguration()
+        .get<boolean>('vscodePluginSwimming.shadowShowInlineSuggestion');
+
+    return typeof showInlineSuggestion === 'boolean' ? showInlineSuggestion : true;
+}
+
+function getShadowRequireManualLineBreaksAndIndentation() {
+    const requireManualLineBreaks = workspace
+        .getConfiguration()
+        .get<boolean>('vscodePluginSwimming.shadowRequireManualLineBreaksAndIndentation');
+
+    return typeof requireManualLineBreaks === 'boolean' ? requireManualLineBreaks : false;
 }
 
 enum RewriteMode {
@@ -71,6 +102,15 @@ function updateShadowContext() {
     void commands.executeCommand('setContext', SHADOW_CONTEXT, shadowSessionMap.size > 0);
 }
 
+function refreshInlineSuggestion() {
+    if (getShadowShowInlineSuggestion()) {
+        void commands.executeCommand(INLINE_SUGGEST_TRIGGER_COMMAND);
+        return;
+    }
+
+    void commands.executeCommand(INLINE_SUGGEST_HIDE_COMMAND);
+}
+
 function finishWriting(editorKey: string) {
     isWritingCodeMap.set(editorKey, false);
     isWriteCodePauseMap.delete(editorKey);
@@ -80,6 +120,7 @@ function clearShadowSession(editorKey: string) {
     shadowSessionMap.delete(editorKey);
     finishWriting(editorKey);
     updateShadowContext();
+    refreshInlineSuggestion();
 }
 
 function clearAllShadowSessions() {
@@ -88,6 +129,7 @@ function clearAllShadowSessions() {
     }
     shadowSessionMap.clear();
     updateShadowContext();
+    refreshInlineSuggestion();
 }
 
 function showPauseinfo(textEditor: TextEditor) {
@@ -152,6 +194,11 @@ function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
         session.index = 0;
         session.line = session.initLine;
         session.character = session.initCharacter;
+    }).then((isEdited) => {
+        if (isEdited) {
+            setEditorCursor(textEditor, getSessionPosition(session));
+        }
+        return isEdited;
     });
 }
 
@@ -167,26 +214,21 @@ function revealCurrentPosition(textEditor: TextEditor, session: RewriteSession) 
 function writeNextTargetChunk(textEditor: TextEditor, session: RewriteSession) {
     return textEditor.edit((editBuilder) => {
         const nowPosition = revealCurrentPosition(textEditor, session);
+        let targetText = session.beforeText[session.index];
 
         if (session.beforeText.startsWith('\r\n', session.index)) {
-            session.index += 2;
-            session.line += 1;
-            session.character = 0;
-            editBuilder.insert(nowPosition, '\r\n');
-            return;
+            targetText = '\r\n';
+        } else if (session.beforeText.startsWith('\n', session.index)) {
+            targetText = '\n';
         }
 
-        if (session.beforeText.startsWith('\n', session.index)) {
-            session.index += 1;
-            session.line += 1;
-            session.character = 0;
-            editBuilder.insert(nowPosition, '\n');
-            return;
+        editBuilder.insert(nowPosition, targetText);
+        advanceShadowSession(session, targetText);
+    }).then((isEdited) => {
+        if (isEdited) {
+            setEditorCursor(textEditor, getSessionPosition(session));
         }
-
-        editBuilder.insert(nowPosition, session.beforeText[session.index]);
-        session.index += 1;
-        session.character += 1;
+        return isEdited;
     });
 }
 
@@ -196,6 +238,12 @@ function isSymbolCharacter(text: string) {
 
 function getExpectedShadowPrefix(session: RewriteSession) {
     return session.beforeText.slice(0, session.index);
+}
+
+function getCurrentShadowLineIndentationRemainder(session: RewriteSession) {
+    const currentLineRemainder = getCurrentShadowLineRemainder(session);
+    const indentationMatch = currentLineRemainder.match(/^[\t ]+/);
+    return indentationMatch ? indentationMatch[0] : '';
 }
 
 function getShadowCursorOffset(textEditor: TextEditor, session: RewriteSession) {
@@ -211,6 +259,38 @@ function getActualShadowPrefix(textEditor: TextEditor, session: RewriteSession) 
     }
 
     return textEditor.document.getText(new Range(startPosition, actualPosition));
+}
+
+function isExpectingLineBreak(session: RewriteSession) {
+    return session.beforeText.startsWith('\r\n', session.index)
+        || session.beforeText.startsWith('\n', session.index);
+}
+
+function getCurrentLineIndentUnit(textEditor: TextEditor, session: RewriteSession) {
+    const indentationRemainder = getCurrentShadowLineIndentationRemainder(session);
+    if (!indentationRemainder) {
+        return '';
+    }
+
+    if (indentationRemainder[0] === '\t') {
+        return '\t';
+    }
+
+    const tabSizeOption = textEditor.options.tabSize;
+    const tabSize = typeof tabSizeOption === 'number' ? tabSizeOption : 4;
+    if (indentationRemainder.length < tabSize) {
+        return '';
+    }
+
+    return indentationRemainder.slice(0, tabSize);
+}
+
+function requiresManualIndentation(textEditor: TextEditor, session: RewriteSession) {
+    if (!getShadowRequireManualLineBreaksAndIndentation()) {
+        return false;
+    }
+
+    return getCurrentLineIndentUnit(textEditor, session).length > 0;
 }
 
 function hasShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
@@ -248,6 +328,23 @@ function deleteShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
     });
 }
 
+function insertTargetText(textEditor: TextEditor, session: RewriteSession, targetText: string) {
+    if (!targetText) {
+        return Promise.resolve(false);
+    }
+
+    return textEditor.edit((editBuilder) => {
+        const nowPosition = revealCurrentPosition(textEditor, session);
+        editBuilder.insert(nowPosition, targetText);
+        advanceShadowSession(session, targetText);
+    }).then((isEdited) => {
+        if (isEdited) {
+            setEditorCursor(textEditor, getSessionPosition(session));
+        }
+        return isEdited;
+    });
+}
+
 function canShadowTypeAdvance(typedText: string, session: RewriteSession) {
     if (session.beforeText.startsWith('\r\n', session.index)) {
         return true;
@@ -279,6 +376,102 @@ function showShadowOutOfSyncMessage(textEditor: TextEditor, session: RewriteSess
     return window.showWarningMessage(
         'shadow Rewriting is out of sync with the target text. Stop and restart this session if needed.'
     );
+}
+
+function showShadowManualKeyHint(textEditor: TextEditor, session: RewriteSession) {
+    if (getShadowRequireManualLineBreaksAndIndentation() && isExpectingLineBreak(session)) {
+        return window.showInformationMessage(
+            'shadow Rewriting is waiting for Enter to move to the next line.'
+        );
+    }
+
+    if (requiresManualIndentation(textEditor, session)) {
+        return window.showInformationMessage(
+            'shadow Rewriting is waiting for Tab to consume the next indentation block.'
+        );
+    }
+
+    return undefined;
+}
+
+function canUseGenericShadowTyping(textEditor: TextEditor, session: RewriteSession) {
+    if (!getShadowRequireManualLineBreaksAndIndentation()) {
+        return true;
+    }
+
+    if (isExpectingLineBreak(session)) {
+        return false;
+    }
+
+    return !requiresManualIndentation(textEditor, session);
+}
+
+async function advanceShadowWithTypedInput(
+    textEditor: TextEditor,
+    shadowSession: RewriteSession,
+    typedText: string
+) {
+    // 两个提示框，仅仅辅助开发调试，生产环境隐藏
+    // if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+    //     return showShadowOutOfSyncMessage(textEditor, shadowSession);
+    // }
+
+    // if (!canUseGenericShadowTyping(textEditor, shadowSession)) {
+    //     return showShadowManualKeyHint(textEditor, shadowSession);
+    // }
+
+    if (!canShadowTypeAdvance(typedText, shadowSession)) {
+        return;
+    }
+
+    const isEdited = await writeNextTargetChunk(textEditor, shadowSession);
+    if (!isEdited) {
+        return;
+    }
+
+    refreshInlineSuggestion();
+}
+
+function completeShadowSessionIfNeeded(editorKey: string, shadowSession: RewriteSession) {
+    if (shadowSession.index >= shadowSession.beforeText.length
+        && getRewriteMode() === RewriteMode.Once) {
+        clearShadowSession(editorKey);
+    }
+}
+
+async function handleShadowLineBreak(textEditor: TextEditor, shadowSession: RewriteSession) {
+    if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+        return showShadowOutOfSyncMessage(textEditor, shadowSession);
+    }
+
+    if (!isExpectingLineBreak(shadowSession)) {
+        return;
+    }
+
+    const isEdited = await writeNextTargetChunk(textEditor, shadowSession);
+    if (!isEdited) {
+        return;
+    }
+
+    refreshInlineSuggestion();
+}
+
+async function handleShadowIndentation(textEditor: TextEditor, shadowSession: RewriteSession) {
+    if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+        return showShadowOutOfSyncMessage(textEditor, shadowSession);
+    }
+
+    const indentUnit = getCurrentLineIndentUnit(textEditor, shadowSession);
+    if (!indentUnit) {
+        return;
+    }
+
+    const isEdited = await insertTargetText(textEditor, shadowSession, indentUnit);
+    if (!isEdited) {
+        return;
+    }
+
+    refreshInlineSuggestion();
 }
 
 function rewriteCodeWithStartAndEnd({
@@ -384,6 +577,7 @@ function shadowRewriteCode(
     isWritingCodeMap.set(editorKey, true);
     isWriteCodePauseMap.set(editorKey, false);
     updateShadowContext();
+    refreshInlineSuggestion();
     window.showInformationMessage('shadow Rewriting started. Press Esc to exit.');
 }
 
@@ -473,23 +667,8 @@ async function handleShadowType(args: { text?: string }) {
         return;
     }
 
-    if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-        return showShadowOutOfSyncMessage(textEditor, shadowSession);
-    }
-
-    if (!canShadowTypeAdvance(typedText, shadowSession)) {
-        return;
-    }
-
-    const isEdited = await writeNextTargetChunk(textEditor, shadowSession);
-    if (!isEdited) {
-        return;
-    }
-
-    if (shadowSession.index >= shadowSession.beforeText.length
-        && getRewriteMode() === RewriteMode.Once) {
-        clearShadowSession(editorKey);
-    }
+    await advanceShadowWithTypedInput(textEditor, shadowSession, typedText);
+    completeShadowSessionIfNeeded(editorKey, shadowSession);
 }
 
 async function handleShadowDeleteLeft() {
@@ -508,6 +687,103 @@ async function handleShadowDeleteLeft() {
     }
 
     await deleteShadowOverflow(textEditor, shadowSession);
+    refreshInlineSuggestion();
+}
+
+async function handleShadowEnter() {
+    const textEditor = window.activeTextEditor;
+    if (!textEditor) {
+        return;
+    }
+
+    const editorKey = getEditorKey(textEditor);
+    const shadowSession = shadowSessionMap.get(editorKey);
+    if (!shadowSession) {
+        return;
+    }
+
+    if (!getShadowRequireManualLineBreaksAndIndentation()) {
+        await advanceShadowWithTypedInput(textEditor, shadowSession, '\n');
+        completeShadowSessionIfNeeded(editorKey, shadowSession);
+        return;
+    }
+
+    await handleShadowLineBreak(textEditor, shadowSession);
+    completeShadowSessionIfNeeded(editorKey, shadowSession);
+}
+
+async function handleShadowTab() {
+    const textEditor = window.activeTextEditor;
+    if (!textEditor) {
+        return;
+    }
+
+    const editorKey = getEditorKey(textEditor);
+    const shadowSession = shadowSessionMap.get(editorKey);
+    if (!shadowSession) {
+        return;
+    }
+
+    if (!getShadowRequireManualLineBreaksAndIndentation()) {
+        await advanceShadowWithTypedInput(textEditor, shadowSession, '\t');
+        completeShadowSessionIfNeeded(editorKey, shadowSession);
+        return;
+    }
+
+    await handleShadowIndentation(textEditor, shadowSession);
+    completeShadowSessionIfNeeded(editorKey, shadowSession);
+}
+
+const shadowInlineCompletionProvider: InlineCompletionItemProvider = {
+    provideInlineCompletionItems(
+        document: TextDocument,
+        position: Position,
+        _context: InlineCompletionContext,
+        _token: CancellationToken
+    ) {
+        if (!getShadowShowInlineSuggestion()) {
+            return [];
+        }
+
+        const textEditor = window.activeTextEditor;
+        if (!textEditor || textEditor.document.uri.toString() !== document.uri.toString()) {
+            return [];
+        }
+
+        const shadowSession = shadowSessionMap.get(getEditorKey(textEditor));
+        if (!shadowSession || isWriteCodePauseMap.get(getEditorKey(textEditor))) {
+            return [];
+        }
+
+        const sessionPosition = getSessionPosition(shadowSession);
+        if (!position.isEqual(sessionPosition) || !canAdvanceShadowSession(textEditor, shadowSession)) {
+            return [];
+        }
+
+        const currentLineRemainder = getGhostTextForCursor(shadowSession, position);
+        if (!currentLineRemainder) {
+            return [];
+        }
+
+        const inlineItem = new InlineCompletionItem(
+            currentLineRemainder,
+            new Range(position, position)
+        );
+
+        return [inlineItem];
+    },
+};
+
+function registerShadowInlineCompletionProvider() {
+    const selectors = [
+        { scheme: 'file' },
+        { scheme: 'untitled' },
+    ];
+
+    return languages.registerInlineCompletionItemProvider(
+        selectors,
+        shadowInlineCompletionProvider
+    );
 }
 
 export function activate(context: ExtensionContext) {
@@ -537,11 +813,14 @@ export function activate(context: ExtensionContext) {
     updateShadowContext();
 
     context.subscriptions.push(
+        registerShadowInlineCompletionProvider(),
         ...textEditorCommandMap.map(({ command, callback }) => {
             return commands.registerTextEditorCommand(command, callback);
         }),
         commands.registerCommand('extension.swimming.exitShadowRewrite', exitShadowRewrite),
         commands.registerCommand(SHADOW_DELETE_LEFT_COMMAND, handleShadowDeleteLeft),
+        commands.registerCommand(SHADOW_ENTER_COMMAND, handleShadowEnter),
+        commands.registerCommand(SHADOW_TAB_COMMAND, handleShadowTab),
         commands.registerCommand(TYPE_COMMAND, handleShadowType)
     );
 }
