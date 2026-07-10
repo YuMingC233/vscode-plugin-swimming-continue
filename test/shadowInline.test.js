@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
     advanceShadowSession,
     getGhostTextForCursor,
+    isShadowPrefixAligned,
 } = require('../out/shadowInline');
 
 test('shows the next line ghost text after a line break', () => {
@@ -44,4 +45,16 @@ test('shows the next line ghost text after a CRLF line break', () => {
         getGhostTextForCursor(session, { line: 1, character: 0 }),
         'second()'
     );
+});
+
+test('checks alignment against the session prefix instead of a stale editor selection', () => {
+    const session = {
+        beforeText: 'first\nsecond()',
+        index: 6,
+        line: 1,
+        character: 0,
+    };
+
+    assert.equal(isShadowPrefixAligned(session, 'first\n'), true);
+    assert.equal(isShadowPrefixAligned(session, 'first'), false);
 });

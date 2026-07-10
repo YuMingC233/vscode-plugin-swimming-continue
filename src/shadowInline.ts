@@ -46,3 +46,10 @@ export function getGhostTextForCursor(
 
     return getCurrentShadowLineRemainder(session);
 }
+
+export function isShadowPrefixAligned(
+    session: ShadowInlineSession,
+    actualPrefix: string
+) {
+    return actualPrefix === session.beforeText.slice(0, session.index);
+}

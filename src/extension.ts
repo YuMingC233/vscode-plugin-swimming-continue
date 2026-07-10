@@ -20,6 +20,7 @@ import {
     advanceShadowSession,
     getCurrentShadowLineRemainder,
     getGhostTextForCursor,
+    isShadowPrefixAligned as isTargetPrefixAligned,
 } from './shadowInline';
 
 const TYPE_COMMAND = 'type';
@@ -93,6 +94,7 @@ function setRewriteMode(nowRewriteMode: RewriteMode) {
 const isWriteCodePauseMap: Map<string, boolean> = new Map();
 const isWritingCodeMap: Map<string, boolean> = new Map();
 const shadowSessionMap: Map<string, RewriteSession> = new Map();
+let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
 
 function getEditorKey(textEditor: TextEditor) {
     return textEditor.document.uri.toString();
@@ -103,8 +105,16 @@ function updateShadowContext() {
 }
 
 function refreshInlineSuggestion() {
+    if (inlineSuggestionRefreshTimer) {
+        clearTimeout(inlineSuggestionRefreshTimer);
+        inlineSuggestionRefreshTimer = undefined;
+    }
+
     if (getShadowShowInlineSuggestion()) {
-        void commands.executeCommand(INLINE_SUGGEST_TRIGGER_COMMAND);
+        inlineSuggestionRefreshTimer = setTimeout(() => {
+            inlineSuggestionRefreshTimer = undefined;
+            void commands.executeCommand(INLINE_SUGGEST_TRIGGER_COMMAND);
+        }, 0);
         return;
     }
 
@@ -261,6 +271,16 @@ function getActualShadowPrefix(textEditor: TextEditor, session: RewriteSession) 
     return textEditor.document.getText(new Range(startPosition, actualPosition));
 }
 
+function getActualShadowPrefixAtSessionPosition(
+    textEditor: TextEditor,
+    session: RewriteSession
+) {
+    return textEditor.document.getText(new Range(
+        getSessionStartPosition(session),
+        getSessionPosition(session)
+    ));
+}
+
 function isExpectingLineBreak(session: RewriteSession) {
     return session.beforeText.startsWith('\r\n', session.index)
         || session.beforeText.startsWith('\n', session.index);
@@ -300,7 +320,7 @@ function hasShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
 }
 
 function isShadowPrefixAligned(textEditor: TextEditor, session: RewriteSession) {
-    return getActualShadowPrefix(textEditor, session) === getExpectedShadowPrefix(session);
+    return isTargetPrefixAligned(session, getActualShadowPrefix(textEditor, session));
 }
 
 function canAdvanceShadowSession(textEditor: TextEditor, session: RewriteSession) {
@@ -755,8 +775,8 @@ const shadowInlineCompletionProvider: InlineCompletionItemProvider = {
             return [];
         }
 
-        const sessionPosition = getSessionPosition(shadowSession);
-        if (!position.isEqual(sessionPosition) || !canAdvanceShadowSession(textEditor, shadowSession)) {
+        const actualPrefix = getActualShadowPrefixAtSessionPosition(textEditor, shadowSession);
+        if (!isTargetPrefixAligned(shadowSession, actualPrefix)) {
             return [];
         }
 
