@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+    getLookWhileTypingAction,
     getLookWhileTypingScrollLine,
     isLookWhileTypingTarget,
 } = require('../out/lookWhileTyping');
@@ -69,5 +70,22 @@ test('matches a close target by both document and editor group', () => {
             target
         ),
         false
+    );
+});
+
+test('maps configured single-character controls and rejects conflicting keys', () => {
+    const controls = {
+        scrollUpKey: '-',
+        scrollDownKey: '=',
+        closeTargetKey: '\\',
+    };
+
+    assert.equal(getLookWhileTypingAction('-', controls), 'scrollUp');
+    assert.equal(getLookWhileTypingAction('=', controls), 'scrollDown');
+    assert.equal(getLookWhileTypingAction('\\', controls), 'closeTarget');
+    assert.equal(getLookWhileTypingAction('x', controls), undefined);
+    assert.equal(
+        getLookWhileTypingAction('-', { ...controls, scrollDownKey: '-' }),
+        undefined
     );
 });

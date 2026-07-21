@@ -11,6 +11,33 @@ export type LookWhileTypingTargetReference = {
     viewColumn: number | undefined;
 };
 
+export type LookWhileTypingControls = {
+    scrollUpKey: string;
+    scrollDownKey: string;
+    closeTargetKey: string;
+};
+
+export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget';
+
+export function getLookWhileTypingAction(
+    typedText: string,
+    controls: LookWhileTypingControls
+) {
+    const matchingActions: LookWhileTypingAction[] = [];
+
+    if (typedText === controls.scrollUpKey) {
+        matchingActions.push('scrollUp');
+    }
+    if (typedText === controls.scrollDownKey) {
+        matchingActions.push('scrollDown');
+    }
+    if (typedText === controls.closeTargetKey) {
+        matchingActions.push('closeTarget');
+    }
+
+    return matchingActions.length === 1 ? matchingActions[0] : undefined;
+}
+
 export function isLookWhileTypingTarget(
     candidate: LookWhileTypingTargetReference,
     target: LookWhileTypingTargetReference

@@ -143,21 +143,6 @@
         "command": "extension.swimming.shadowTab",
         "key": "tab",
         "when": "editorTextFocus && vscodePluginSwimming.shadowActive"
-      },
-      {
-        "command": "extension.swimming.scrollLookWhileTypingUp",
-        "key": "-",
-        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
-      },
-      {
-        "command": "extension.swimming.scrollLookWhileTypingDown",
-        "key": "=",
-        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
-      },
-      {
-        "command": "extension.swimming.closeLookWhileTypingTarget",
-        "key": "\\",
-        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
       }
     ],
     "configuration": {
@@ -194,6 +179,27 @@
           "minimum": 1,
           "default": 3,
           "description": "边打边看时，每次滚动工作窗口的行数"
+        },
+        "vscodePluginSwimming.lookWhileTypingScrollUpKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "-",
+          "description": "边打边看时，向上滚动工作窗口的单字符按键"
+        },
+        "vscodePluginSwimming.lookWhileTypingScrollDownKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "=",
+          "description": "边打边看时，向下滚动工作窗口的单字符按键"
+        },
+        "vscodePluginSwimming.lookWhileTypingCloseTargetKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "\\",
+          "description": "边打边看时，关闭工作窗口的单字符按键"
         }
       }
     }

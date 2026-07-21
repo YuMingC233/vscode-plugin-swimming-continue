@@ -27,6 +27,7 @@ import {
     KeyedAsyncQueue,
 } from './shadowInline';
 import {
+    getLookWhileTypingAction,
     getLookWhileTypingScrollLine,
     isLookWhileTypingTarget,
 } from './lookWhileTyping';
@@ -99,6 +100,36 @@ function getLookWhileTypingStepLines() {
         .get<number>('vscodePluginSwimming.lookWhileTypingStepLines');
 
     return typeof configuredStepLines === 'number' ? configuredStepLines : 3;
+}
+
+function getLookWhileTypingControlKey(
+    configurationKey: string,
+    fallbackKey: string
+) {
+    const configuredKey = workspace
+        .getConfiguration()
+        .get<string>(configurationKey);
+
+    return typeof configuredKey === 'string' && [...configuredKey].length === 1
+        ? configuredKey
+        : fallbackKey;
+}
+
+function getLookWhileTypingControls() {
+    return {
+        scrollUpKey: getLookWhileTypingControlKey(
+            'vscodePluginSwimming.lookWhileTypingScrollUpKey',
+            '-'
+        ),
+        scrollDownKey: getLookWhileTypingControlKey(
+            'vscodePluginSwimming.lookWhileTypingScrollDownKey',
+            '='
+        ),
+        closeTargetKey: getLookWhileTypingControlKey(
+            'vscodePluginSwimming.lookWhileTypingCloseTargetKey',
+            '\\'
+        ),
+    };
 }
 
 enum RewriteMode {
@@ -253,6 +284,31 @@ async function closeLookWhileTypingTarget(context: ExtensionContext) {
     if (isClosed) {
         await clearLookWhileTypingTarget(context);
     }
+}
+
+async function handleLookWhileTypingInput(
+    context: ExtensionContext,
+    typedText: string
+) {
+    if (!getLookWhileTypingTargetEditor()) {
+        return false;
+    }
+
+    const action = getLookWhileTypingAction(typedText, getLookWhileTypingControls());
+    if (action === 'scrollUp') {
+        scrollLookWhileTyping(-1);
+        return true;
+    }
+    if (action === 'scrollDown') {
+        scrollLookWhileTyping(1);
+        return true;
+    }
+    if (action === 'closeTarget') {
+        await closeLookWhileTypingTarget(context);
+        return true;
+    }
+
+    return false;
 }
 
 function updateShadowContext() {
@@ -789,10 +845,22 @@ async function switchWriteMode(
     window.showInformationMessage('switch to :' + getRewriteMode());
 }
 
-async function handleShadowType(args: { text?: string }) {
+async function handleShadowType(
+    context: ExtensionContext,
+    args: { text?: string }
+) {
     const textEditor = window.activeTextEditor;
     if (!textEditor) {
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
+    }
+
+    const typedText = typeof args.text === 'string' ? args.text : '';
+    if (!typedText) {
+        return;
+    }
+
+    if (await handleLookWhileTypingInput(context, typedText)) {
+        return;
     }
 
     const editorKey = getEditorKey(textEditor);
@@ -800,11 +868,6 @@ async function handleShadowType(args: { text?: string }) {
 
     if (!shadowSession || isWriteCodePauseMap.get(editorKey)) {
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
-    }
-
-    const typedText = typeof args.text === 'string' ? args.text : '';
-    if (!typedText) {
-        return;
     }
 
     return shadowInputQueue.enqueue(editorKey, async () => {
@@ -1038,7 +1101,7 @@ export function activate(context: ExtensionContext) {
         commands.registerCommand(SHADOW_DELETE_LEFT_COMMAND, handleShadowDeleteLeft),
         commands.registerCommand(SHADOW_ENTER_COMMAND, handleShadowEnter),
         commands.registerCommand(SHADOW_TAB_COMMAND, handleShadowTab),
-        commands.registerCommand(TYPE_COMMAND, handleShadowType)
+        commands.registerCommand(TYPE_COMMAND, (args) => handleShadowType(context, args))
     );
 }
 
