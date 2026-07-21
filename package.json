@@ -1,7 +1,7 @@
 {
   "name": "vscode-plugin-swimming",
-  "displayName": "swimming",
-  "description": "VSCode模拟写代码，划水，摸鱼神器。代码写的快，提早完工被压榨怎么办？你需要一个模拟写代码工具，让代码自己重写一遍。",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "1.1.2",
   "publisher": "swimming",
   "icon": "128.png",
@@ -27,89 +27,122 @@
     "onCommand:extension.swimming.closeLookWhileTypingTarget"
   ],
   "main": "./out/extension.js",
+  "l10n": "./l10n",
   "contributes": {
     "commands": [
       {
         "command": "extension.swimming.rewriteCode",
-        "title": "Code Rewriting"
+        "title": "%command.rewriteCode%"
       },
       {
         "command": "extension.swimming.closeWriteCode",
-        "title": "Close Write Code"
+        "title": "%command.closeWriteCode%"
       },
       {
         "command": "extension.swimming.shadowRewriteCode",
-        "title": "Shadow Rewriting"
+        "title": "%command.shadowRewriteCode%"
       },
       {
         "command": "extension.swimming.pauseWriteCode",
-        "title": "Pause/Continue Write Code"
+        "title": "%command.pauseWriteCode%"
       },
       {
         "command": "extension.swimming.switchWriteMode",
-        "title": "Switch Write Mode"
+        "title": "%command.switchWriteMode%"
       },
       {
         "command": "extension.swimming.exitShadowRewrite",
-        "title": "Exit Shadow Rewriting"
+        "title": "%command.exitShadowRewrite%"
       },
       {
         "command": "extension.swimming.selectLookWhileTypingTarget",
-        "title": "边打边看：选择工作窗口"
+        "title": "%command.selectLookWhileTypingTarget%"
       },
       {
         "command": "extension.swimming.clearLookWhileTypingTarget",
-        "title": "边打边看：清除工作窗口"
+        "title": "%command.clearLookWhileTypingTarget%"
       },
       {
         "command": "extension.swimming.scrollLookWhileTypingUp",
-        "title": "边打边看：向上滚动工作窗口"
+        "title": "%command.scrollLookWhileTypingUp%"
       },
       {
         "command": "extension.swimming.scrollLookWhileTypingDown",
-        "title": "边打边看：向下滚动工作窗口"
+        "title": "%command.scrollLookWhileTypingDown%"
       },
       {
         "command": "extension.swimming.closeLookWhileTypingTarget",
-        "title": "边打边看：关闭工作窗口"
+        "title": "%command.closeLookWhileTypingTarget%"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "swimming.menu",
+        "label": "%submenu.swimming%"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "when": "editorFocus",
+          "submenu": "swimming.menu",
+          "group": "navigation"
+        }
+      ],
+      "swimming.menu": [
+        {
           "command": "extension.swimming.rewriteCode",
-          "group": "navigation"
+          "when": "editorFocus",
+          "group": "1_rewrite"
         },
         {
-          "when": "editorFocus",
-          "command": "extension.swimming.pauseWriteCode",
-          "group": "navigation"
-        },
-        {
-          "when": "editorFocus",
           "command": "extension.swimming.shadowRewriteCode",
-          "group": "navigation"
+          "when": "editorFocus",
+          "group": "2_shadow"
         },
         {
+          "command": "extension.swimming.pauseWriteCode",
           "when": "editorFocus",
+          "group": "3_rewriteControls"
+        },
+        {
           "command": "extension.swimming.switchWriteMode",
-          "group": "navigation"
-        },
-        {
-          "when": "editorFocus && vscodePluginSwimming.shadowActive",
-          "command": "extension.swimming.exitShadowRewrite",
-          "group": "navigation"
-        },
-        {
           "when": "editorFocus",
-          "command": "extension.swimming.selectLookWhileTypingTarget",
-          "group": "navigation"
+          "group": "3_rewriteControls"
         },
         {
-          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "command": "extension.swimming.exitShadowRewrite",
+          "when": "editorFocus && vscodePluginSwimming.shadowActive",
+          "group": "3_rewriteControls"
+        },
+        {
+          "command": "extension.swimming.closeWriteCode",
+          "when": "editorFocus",
+          "group": "3_rewriteControls"
+        },
+        {
+          "command": "extension.swimming.selectLookWhileTypingTarget",
+          "when": "editorFocus",
+          "group": "4_lookWhileTyping"
+        },
+        {
           "command": "extension.swimming.clearLookWhileTypingTarget",
-          "group": "navigation"
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
+        },
+        {
+          "command": "extension.swimming.scrollLookWhileTypingUp",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
+        },
+        {
+          "command": "extension.swimming.scrollLookWhileTypingDown",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
+        },
+        {
+          "command": "extension.swimming.closeLookWhileTypingTarget",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
         }
       ]
     },
@@ -147,59 +180,59 @@
     ],
     "configuration": {
       "type": "object",
-      "title": "Swimming Config",
+      "title": "%configuration.title%",
       "properties": {
         "vscodePluginSwimming.reWriteSpeed": {
           "type": "number",
           "default": 200,
-          "description": "重写速度(ms)"
+          "description": "%configuration.rewriteSpeed%"
         },
         "vscodePluginSwimming.rewriteMode": {
           "type": "string",
           "default": "once",
-          "description": "重写模式(once/cycle)"
+          "description": "%configuration.rewriteMode%"
         },
         "vscodePluginSwimming.shadowRequireShiftForSymbols": {
           "type": "boolean",
           "default": true,
-          "description": "shadow Rewriting遇到符号时，是否要求先输入一个符号字符再映射"
+          "description": "%configuration.shadowRequireShiftForSymbols%"
         },
         "vscodePluginSwimming.shadowShowInlineSuggestion": {
           "type": "boolean",
           "default": true,
-          "description": "shadow Rewriting时，是否显示当前代码行的ghost text提示"
+          "description": "%configuration.shadowShowInlineSuggestion%"
         },
         "vscodePluginSwimming.shadowRequireManualLineBreaksAndIndentation": {
           "type": "boolean",
           "default": false,
-          "description": "shadow Rewriting时，是否要求用Enter换行、用Tab推进新行缩进"
+          "description": "%configuration.shadowRequireManualLineBreaksAndIndentation%"
         },
         "vscodePluginSwimming.lookWhileTypingStepLines": {
           "type": "number",
           "minimum": 1,
           "default": 3,
-          "description": "边打边看时，每次滚动工作窗口的行数"
+          "description": "%configuration.lookWhileTypingStepLines%"
         },
         "vscodePluginSwimming.lookWhileTypingScrollUpKey": {
           "type": "string",
           "minLength": 1,
           "maxLength": 1,
           "default": "-",
-          "description": "边打边看时，向上滚动工作窗口的单字符按键"
+          "description": "%configuration.lookWhileTypingScrollUpKey%"
         },
         "vscodePluginSwimming.lookWhileTypingScrollDownKey": {
           "type": "string",
           "minLength": 1,
           "maxLength": 1,
           "default": "=",
-          "description": "边打边看时，向下滚动工作窗口的单字符按键"
+          "description": "%configuration.lookWhileTypingScrollDownKey%"
         },
         "vscodePluginSwimming.lookWhileTypingCloseTargetKey": {
           "type": "string",
           "minLength": 1,
           "maxLength": 1,
           "default": "\\",
-          "description": "边打边看时，关闭工作窗口的单字符按键"
+          "description": "%configuration.lookWhileTypingCloseTargetKey%"
         }
       }
     }

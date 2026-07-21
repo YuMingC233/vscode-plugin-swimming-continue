@@ -6,6 +6,7 @@ import {
     InlineCompletionItem,
     InlineCompletionItemProvider,
     languages,
+    l10n,
     Position,
     Range,
     Selection,
@@ -188,7 +189,7 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
 
     if (!targetEditors.length) {
         return window.showWarningMessage(
-            'Open the working file beside the typing editor before selecting it.'
+            l10n.t('Open the working file beside the typing editor before selecting it.')
         );
     }
 
@@ -196,11 +197,14 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
         targetEditors.map((textEditor) => {
             return {
                 label: workspace.asRelativePath(textEditor.document.uri, false),
-                description: `Editor group ${textEditor.viewColumn ?? 'unknown'}`,
+                description: l10n.t(
+                    'Editor group {0}',
+                    textEditor.viewColumn ?? l10n.t('unknown')
+                ),
                 textEditor,
             };
         }),
-        { placeHolder: 'Select the editor to scroll while you type.' }
+        { placeHolder: l10n.t('Select the editor to scroll while you type.') }
     );
 
     if (!selectedTarget) {
@@ -216,7 +220,7 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
         lookWhileTypingTarget
     );
     updateLookWhileTypingContext();
-    return window.showInformationMessage('Look While Typing target selected.');
+    return window.showInformationMessage(l10n.t('Look While Typing target selected.'));
 }
 
 async function clearLookWhileTypingTarget(context: ExtensionContext) {
@@ -355,7 +359,7 @@ function clearAllShadowSessions() {
 
 function showPauseinfo(textEditor: TextEditor) {
     if (isWriteCodePauseMap.get(getEditorKey(textEditor))) {
-        window.showInformationMessage('pauseWriteCode Now');
+        window.showInformationMessage(l10n.t('Code rewriting is paused.'));
     }
 }
 
@@ -599,12 +603,16 @@ function canShadowTypeAdvance(typedText: string, session: RewriteSession) {
 function showShadowOutOfSyncMessage(textEditor: TextEditor, session: RewriteSession) {
     if (hasShadowOverflow(textEditor, session)) {
         return window.showWarningMessage(
-            'shadow Rewriting detected extra characters. Press Backspace to clean them before continuing.'
+            l10n.t(
+                'Shadow Rewriting detected extra characters. Press Backspace to clean them before continuing.'
+            )
         );
     }
 
     return window.showWarningMessage(
-        'shadow Rewriting is out of sync with the target text. Stop and restart this session if needed.'
+        l10n.t(
+            'Shadow Rewriting is out of sync with the target text. Stop and restart this session if needed.'
+        )
     );
 }
 
@@ -750,7 +758,7 @@ function rewriteCode(
 ) {
     const editorKey = getEditorKey(textEditor);
     if (isWritingCodeMap.get(editorKey)) {
-        return window.showInformationMessage('rewriteCode already in progress');
+        return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
     }
 
     isWritingCodeMap.set(editorKey, true);
@@ -768,7 +776,7 @@ function shadowRewriteCode(
 ) {
     const editorKey = getEditorKey(textEditor);
     if (isWritingCodeMap.get(editorKey)) {
-        return window.showInformationMessage('rewriteCode already in progress');
+        return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
     }
 
     const selectionRange = getSelectionRangeByStartAndEnd({
@@ -779,7 +787,7 @@ function shadowRewriteCode(
     const session = createRewriteSession(textEditor, selectionRange);
 
     if (!session.beforeText) {
-        return window.showInformationMessage('No code available for shadow rewriting.');
+        return window.showInformationMessage(l10n.t('No code available for Shadow Rewriting.'));
     }
 
     edit.delete(selectionRange);
@@ -788,7 +796,7 @@ function shadowRewriteCode(
     isWriteCodePauseMap.set(editorKey, false);
     updateShadowContext();
     refreshInlineSuggestion();
-    window.showInformationMessage('shadow Rewriting started. Press Esc to exit.');
+    window.showInformationMessage(l10n.t('Shadow Rewriting started. Press Esc to exit.'));
 }
 
 function exitShadowRewrite() {
@@ -803,7 +811,7 @@ function exitShadowRewrite() {
     }
 
     clearShadowSession(editorKey);
-    window.showInformationMessage('shadow Rewriting stopped.');
+    window.showInformationMessage(l10n.t('Shadow Rewriting stopped.'));
 }
 
 function closeWriteCode(
@@ -824,7 +832,9 @@ function pauseWriteCode(
 ) {
     const editorKey = getEditorKey(textEditor);
     if (!isWritingCodeMap.get(editorKey)) {
-        return window.showInformationMessage('rewriteCode not run,cannot pause.');
+        return window.showInformationMessage(
+            l10n.t('Code rewriting is not active, so it cannot be paused.')
+        );
     }
     isWriteCodePauseMap.set(editorKey, !isWriteCodePauseMap.get(editorKey));
     showPauseinfo(textEditor);
@@ -842,7 +852,7 @@ async function switchWriteMode(
         nowRewriteMode = RewriteMode.Once;
     }
     await setRewriteMode(nowRewriteMode);
-    window.showInformationMessage('switch to :' + getRewriteMode());
+    window.showInformationMessage(l10n.t('Switched to {0} mode.', getRewriteMode()));
 }
 
 async function handleShadowType(
