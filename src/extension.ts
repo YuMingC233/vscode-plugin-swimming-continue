@@ -17,11 +17,13 @@ import {
     workspace,
 } from 'vscode';
 import {
-    advanceShadowSession,
     canUseGenericShadowTyping as canUseGenericShadowTypingPolicy,
+    commitShadowSessionEdit,
     getCurrentShadowLineRemainder,
     getGhostTextForCursor,
+    getShadowInputCharacters,
     isShadowPrefixAligned as isTargetPrefixAligned,
+    KeyedAsyncQueue,
 } from './shadowInline';
 
 const TYPE_COMMAND = 'type';
@@ -95,6 +97,7 @@ function setRewriteMode(nowRewriteMode: RewriteMode) {
 const isWriteCodePauseMap: Map<string, boolean> = new Map();
 const isWritingCodeMap: Map<string, boolean> = new Map();
 const shadowSessionMap: Map<string, RewriteSession> = new Map();
+const shadowInputQueue = new KeyedAsyncQueue();
 let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
 
 function getEditorKey(textEditor: TextEditor) {
@@ -200,13 +203,14 @@ function setEditorCursor(textEditor: TextEditor, position: Position) {
 }
 
 function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
+    const writtenRange = getWrittenRange(session);
     return textEditor.edit((editBuilder) => {
-        editBuilder.delete(getWrittenRange(session));
-        session.index = 0;
-        session.line = session.initLine;
-        session.character = session.initCharacter;
+        editBuilder.delete(writtenRange);
     }).then((isEdited) => {
         if (isEdited) {
+            session.index = 0;
+            session.line = session.initLine;
+            session.character = session.initCharacter;
             setEditorCursor(textEditor, getSessionPosition(session));
         }
         return isEdited;
@@ -223,20 +227,19 @@ function revealCurrentPosition(textEditor: TextEditor, session: RewriteSession) 
 }
 
 function writeNextTargetChunk(textEditor: TextEditor, session: RewriteSession) {
+    const nowPosition = revealCurrentPosition(textEditor, session);
+    let targetText = session.beforeText[session.index];
+
+    if (session.beforeText.startsWith('\r\n', session.index)) {
+        targetText = '\r\n';
+    } else if (session.beforeText.startsWith('\n', session.index)) {
+        targetText = '\n';
+    }
+
     return textEditor.edit((editBuilder) => {
-        const nowPosition = revealCurrentPosition(textEditor, session);
-        let targetText = session.beforeText[session.index];
-
-        if (session.beforeText.startsWith('\r\n', session.index)) {
-            targetText = '\r\n';
-        } else if (session.beforeText.startsWith('\n', session.index)) {
-            targetText = '\n';
-        }
-
         editBuilder.insert(nowPosition, targetText);
-        advanceShadowSession(session, targetText);
     }).then((isEdited) => {
-        if (isEdited) {
+        if (commitShadowSessionEdit(session, targetText, isEdited)) {
             setEditorCursor(textEditor, getSessionPosition(session));
         }
         return isEdited;
@@ -354,12 +357,11 @@ function insertTargetText(textEditor: TextEditor, session: RewriteSession, targe
         return Promise.resolve(false);
     }
 
+    const nowPosition = revealCurrentPosition(textEditor, session);
     return textEditor.edit((editBuilder) => {
-        const nowPosition = revealCurrentPosition(textEditor, session);
         editBuilder.insert(nowPosition, targetText);
-        advanceShadowSession(session, targetText);
     }).then((isEdited) => {
-        if (isEdited) {
+        if (commitShadowSessionEdit(session, targetText, isEdited)) {
             setEditorCursor(textEditor, getSessionPosition(session));
         }
         return isEdited;
@@ -649,27 +651,49 @@ async function handleShadowType(args: { text?: string }) {
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
     }
 
-    if (textEditor.document.isClosed) {
-        clearShadowSession(editorKey);
-        return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
-    }
-
-    if (shadowSession.index >= shadowSession.beforeText.length) {
-        if (getRewriteMode() === RewriteMode.Cycle) {
-            await resetRewriteSession(textEditor, shadowSession);
-        } else {
-            clearShadowSession(editorKey);
-            return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
-        }
-    }
-
     const typedText = typeof args.text === 'string' ? args.text : '';
     if (!typedText) {
         return;
     }
 
-    await advanceShadowWithTypedInput(textEditor, shadowSession, typedText);
-    completeShadowSessionIfNeeded(editorKey, shadowSession);
+    return shadowInputQueue.enqueue(editorKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== shadowSession
+            || isWriteCodePauseMap.get(editorKey)) {
+            return;
+        }
+
+        if (textEditor.document.isClosed) {
+            clearShadowSession(editorKey);
+            return;
+        }
+
+        const typedCharacters = getShadowInputCharacters(typedText);
+        for (let index = 0; index < typedCharacters.length; index += 1) {
+            if (shadowSessionMap.get(editorKey) !== shadowSession) {
+                return;
+            }
+
+            if (shadowSession.index >= shadowSession.beforeText.length) {
+                if (getRewriteMode() === RewriteMode.Cycle) {
+                    const isReset = await resetRewriteSession(textEditor, shadowSession);
+                    if (!isReset) {
+                        return;
+                    }
+                } else {
+                    clearShadowSession(editorKey);
+                    const remainingText = typedCharacters.slice(index).join('');
+                    return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: remainingText });
+                }
+            }
+
+            await advanceShadowWithTypedInput(
+                textEditor,
+                shadowSession,
+                typedCharacters[index]
+            );
+            completeShadowSessionIfNeeded(editorKey, shadowSession);
+        }
+    });
 }
 
 async function handleShadowDeleteLeft() {
@@ -678,17 +702,21 @@ async function handleShadowDeleteLeft() {
         return;
     }
 
-    const shadowSession = shadowSessionMap.get(getEditorKey(textEditor));
+    const editorKey = getEditorKey(textEditor);
+    const shadowSession = shadowSessionMap.get(editorKey);
     if (!shadowSession) {
         return;
     }
 
-    if (!hasShadowOverflow(textEditor, shadowSession)) {
-        return;
-    }
+    return shadowInputQueue.enqueue(editorKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== shadowSession
+            || !hasShadowOverflow(textEditor, shadowSession)) {
+            return;
+        }
 
-    await deleteShadowOverflow(textEditor, shadowSession);
-    refreshInlineSuggestion();
+        await deleteShadowOverflow(textEditor, shadowSession);
+        refreshInlineSuggestion();
+    });
 }
 
 async function handleShadowEnter() {
@@ -703,14 +731,20 @@ async function handleShadowEnter() {
         return;
     }
 
-    if (!getShadowRequireManualLineBreaksAndIndentation()) {
-        await advanceShadowWithTypedInput(textEditor, shadowSession, '\n');
-        completeShadowSessionIfNeeded(editorKey, shadowSession);
-        return;
-    }
+    return shadowInputQueue.enqueue(editorKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== shadowSession) {
+            return;
+        }
 
-    await handleShadowLineBreak(textEditor, shadowSession);
-    completeShadowSessionIfNeeded(editorKey, shadowSession);
+        if (!getShadowRequireManualLineBreaksAndIndentation()) {
+            await advanceShadowWithTypedInput(textEditor, shadowSession, '\n');
+            completeShadowSessionIfNeeded(editorKey, shadowSession);
+            return;
+        }
+
+        await handleShadowLineBreak(textEditor, shadowSession);
+        completeShadowSessionIfNeeded(editorKey, shadowSession);
+    });
 }
 
 async function handleShadowTab() {
@@ -725,14 +759,20 @@ async function handleShadowTab() {
         return;
     }
 
-    if (!getShadowRequireManualLineBreaksAndIndentation()) {
-        await advanceShadowWithTypedInput(textEditor, shadowSession, '\t');
-        completeShadowSessionIfNeeded(editorKey, shadowSession);
-        return;
-    }
+    return shadowInputQueue.enqueue(editorKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== shadowSession) {
+            return;
+        }
 
-    await handleShadowIndentation(textEditor, shadowSession);
-    completeShadowSessionIfNeeded(editorKey, shadowSession);
+        if (!getShadowRequireManualLineBreaksAndIndentation()) {
+            await advanceShadowWithTypedInput(textEditor, shadowSession, '\t');
+            completeShadowSessionIfNeeded(editorKey, shadowSession);
+            return;
+        }
+
+        await handleShadowIndentation(textEditor, shadowSession);
+        completeShadowSessionIfNeeded(editorKey, shadowSession);
+    });
 }
 
 const shadowInlineCompletionProvider: InlineCompletionItemProvider = {

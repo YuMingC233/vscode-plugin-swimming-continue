@@ -4,8 +4,11 @@ const test = require('node:test');
 const {
     advanceShadowSession,
     canUseGenericShadowTyping,
+    commitShadowSessionEdit,
     getGhostTextForCursor,
+    getShadowInputCharacters,
     isShadowPrefixAligned,
+    KeyedAsyncQueue,
 } = require('../out/shadowInline');
 
 test('shows the next line ghost text after a line break', () => {
@@ -85,4 +88,59 @@ test('blocks generic typing while manual line breaks or indentation are required
         }),
         true
     );
+});
+
+test('serializes shadow input for the same editor', async () => {
+    const queue = new KeyedAsyncQueue();
+    const events = [];
+    let releaseFirst;
+    let markFirstStarted;
+    const firstGate = new Promise((resolve) => {
+        releaseFirst = resolve;
+    });
+    const firstStarted = new Promise((resolve) => {
+        markFirstStarted = resolve;
+    });
+
+    const first = queue.enqueue('editor', async () => {
+        events.push('first:start');
+        markFirstStarted();
+        await firstGate;
+        events.push('first:end');
+    });
+    const second = queue.enqueue('editor', async () => {
+        events.push('second');
+    });
+
+    await firstStarted;
+    assert.deepEqual(events, ['first:start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(events, ['first:start', 'first:end', 'second']);
+});
+
+test('advances the shadow session only after an edit succeeds', () => {
+    const session = {
+        beforeText: 'abc',
+        index: 0,
+        line: 0,
+        character: 0,
+    };
+
+    assert.equal(commitShadowSessionEdit(session, 'a', false), false);
+    assert.deepEqual(
+        { index: session.index, line: session.line, character: session.character },
+        { index: 0, line: 0, character: 0 }
+    );
+
+    assert.equal(commitShadowSessionEdit(session, 'a', true), true);
+    assert.deepEqual(
+        { index: session.index, line: session.line, character: session.character },
+        { index: 1, line: 0, character: 1 }
+    );
+});
+
+test('splits a batched type event into individual target advances', () => {
+    assert.deepEqual(getShadowInputCharacters('abc'), ['a', 'b', 'c']);
 });
