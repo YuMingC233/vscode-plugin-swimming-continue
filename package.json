@@ -6,6 +6,7 @@
   "publisher": "swimming",
   "icon": "128.png",
   "engines": {
+    "node": ">=20.0.0",
     "vscode": "^1.100.0"
   },
   "packageManager": "pnpm@10.32.1",
@@ -165,7 +166,7 @@
   },
   "homepage": "https://github.com/zy445566/vscode-plugin-swimming#readme",
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "@types/vscode": "^1.100.0",
     "@vscode/vsce": "^2.32.0",
     "typescript": "^5.8.2"
