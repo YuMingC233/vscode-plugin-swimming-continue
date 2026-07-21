@@ -9,6 +9,7 @@ import {
     Position,
     Range,
     Selection,
+    TabInputText,
     TextEditor,
     TextEditorEdit,
     TextEditorRevealType,
@@ -25,6 +26,10 @@ import {
     isShadowPrefixAligned as isTargetPrefixAligned,
     KeyedAsyncQueue,
 } from './shadowInline';
+import {
+    getLookWhileTypingScrollLine,
+    isLookWhileTypingTarget,
+} from './lookWhileTyping';
 
 const TYPE_COMMAND = 'type';
 const DEFAULT_TYPE_COMMAND = 'default:type';
@@ -32,6 +37,13 @@ const SHADOW_CONTEXT = 'vscodePluginSwimming.shadowActive';
 const SHADOW_DELETE_LEFT_COMMAND = 'extension.swimming.shadowDeleteLeft';
 const SHADOW_ENTER_COMMAND = 'extension.swimming.shadowEnter';
 const SHADOW_TAB_COMMAND = 'extension.swimming.shadowTab';
+const LOOK_WHILE_TYPING_CONTEXT = 'vscodePluginSwimming.lookWhileTypingTargetVisible';
+const LOOK_WHILE_TYPING_TARGET_STATE_KEY = 'lookWhileTyping.target';
+const LOOK_WHILE_TYPING_SELECT_TARGET_COMMAND = 'extension.swimming.selectLookWhileTypingTarget';
+const LOOK_WHILE_TYPING_CLEAR_TARGET_COMMAND = 'extension.swimming.clearLookWhileTypingTarget';
+const LOOK_WHILE_TYPING_SCROLL_UP_COMMAND = 'extension.swimming.scrollLookWhileTypingUp';
+const LOOK_WHILE_TYPING_SCROLL_DOWN_COMMAND = 'extension.swimming.scrollLookWhileTypingDown';
+const LOOK_WHILE_TYPING_CLOSE_TARGET_COMMAND = 'extension.swimming.closeLookWhileTypingTarget';
 const INLINE_SUGGEST_TRIGGER_COMMAND = 'editor.action.inlineSuggest.trigger';
 const INLINE_SUGGEST_HIDE_COMMAND = 'editor.action.inlineSuggest.hide';
 
@@ -42,6 +54,11 @@ type RewriteSession = {
     character: number;
     initLine: number;
     initCharacter: number;
+};
+
+type LookWhileTypingTarget = {
+    documentUri: string;
+    viewColumn: number | undefined;
 };
 
 function getReWriteSpeed() {
@@ -76,6 +93,14 @@ function getShadowRequireManualLineBreaksAndIndentation() {
     return typeof requireManualLineBreaks === 'boolean' ? requireManualLineBreaks : false;
 }
 
+function getLookWhileTypingStepLines() {
+    const configuredStepLines = workspace
+        .getConfiguration()
+        .get<number>('vscodePluginSwimming.lookWhileTypingStepLines');
+
+    return typeof configuredStepLines === 'number' ? configuredStepLines : 3;
+}
+
 enum RewriteMode {
     Cycle = 'cycle',
     Once = 'once',
@@ -98,10 +123,136 @@ const isWriteCodePauseMap: Map<string, boolean> = new Map();
 const isWritingCodeMap: Map<string, boolean> = new Map();
 const shadowSessionMap: Map<string, RewriteSession> = new Map();
 const shadowInputQueue = new KeyedAsyncQueue();
+let lookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
 
 function getEditorKey(textEditor: TextEditor) {
     return textEditor.document.uri.toString();
+}
+
+function getLookWhileTypingTargetEditor() {
+    if (!lookWhileTypingTarget) {
+        return undefined;
+    }
+
+    return window.visibleTextEditors.find((textEditor) => {
+        return getEditorKey(textEditor) === lookWhileTypingTarget?.documentUri
+            && textEditor.viewColumn === lookWhileTypingTarget?.viewColumn;
+    });
+}
+
+function updateLookWhileTypingContext() {
+    void commands.executeCommand(
+        'setContext',
+        LOOK_WHILE_TYPING_CONTEXT,
+        Boolean(getLookWhileTypingTargetEditor())
+    );
+}
+
+async function selectLookWhileTypingTarget(context: ExtensionContext) {
+    const activeTextEditor = window.activeTextEditor;
+    const targetEditors = window.visibleTextEditors.filter((textEditor) => {
+        return textEditor !== activeTextEditor;
+    });
+
+    if (!targetEditors.length) {
+        return window.showWarningMessage(
+            'Open the working file beside the typing editor before selecting it.'
+        );
+    }
+
+    const selectedTarget = await window.showQuickPick(
+        targetEditors.map((textEditor) => {
+            return {
+                label: workspace.asRelativePath(textEditor.document.uri, false),
+                description: `Editor group ${textEditor.viewColumn ?? 'unknown'}`,
+                textEditor,
+            };
+        }),
+        { placeHolder: 'Select the editor to scroll while you type.' }
+    );
+
+    if (!selectedTarget) {
+        return;
+    }
+
+    lookWhileTypingTarget = {
+        documentUri: getEditorKey(selectedTarget.textEditor),
+        viewColumn: selectedTarget.textEditor.viewColumn,
+    };
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_TARGET_STATE_KEY,
+        lookWhileTypingTarget
+    );
+    updateLookWhileTypingContext();
+    return window.showInformationMessage('Look While Typing target selected.');
+}
+
+async function clearLookWhileTypingTarget(context: ExtensionContext) {
+    lookWhileTypingTarget = undefined;
+    await context.workspaceState.update(LOOK_WHILE_TYPING_TARGET_STATE_KEY, undefined);
+    updateLookWhileTypingContext();
+}
+
+function scrollLookWhileTyping(direction: -1 | 1) {
+    const targetTextEditor = getLookWhileTypingTargetEditor();
+    if (!targetTextEditor) {
+        updateLookWhileTypingContext();
+        return;
+    }
+
+    const visibleRange = targetTextEditor.visibleRanges[0];
+    if (!visibleRange) {
+        return;
+    }
+
+    const targetLine = getLookWhileTypingScrollLine({
+        firstVisibleLine: visibleRange.start.line,
+        lastVisibleLine: visibleRange.end.line,
+        lineCount: targetTextEditor.document.lineCount,
+        direction,
+        stepLines: getLookWhileTypingStepLines(),
+    });
+    const targetPosition = new Position(targetLine, 0);
+    targetTextEditor.revealRange(
+        new Range(targetPosition, targetPosition),
+        TextEditorRevealType.InCenter
+    );
+}
+
+function getLookWhileTypingTargetTab() {
+    const target = lookWhileTypingTarget;
+    if (!target) {
+        return undefined;
+    }
+
+    const targetTabGroup = window.tabGroups.all.find((tabGroup) => {
+        return tabGroup.viewColumn === target.viewColumn;
+    });
+
+    return targetTabGroup?.tabs.find((tab) => {
+        if (!(tab.input instanceof TabInputText)) {
+            return false;
+        }
+
+        return isLookWhileTypingTarget({
+            documentUri: tab.input.uri.toString(),
+            viewColumn: tab.group.viewColumn,
+        }, target);
+    });
+}
+
+async function closeLookWhileTypingTarget(context: ExtensionContext) {
+    const targetTab = getLookWhileTypingTargetTab();
+    if (!targetTab) {
+        updateLookWhileTypingContext();
+        return;
+    }
+
+    const isClosed = await window.tabGroups.close(targetTab, true);
+    if (isClosed) {
+        await clearLookWhileTypingTarget(context);
+    }
 }
 
 function updateShadowContext() {
@@ -851,14 +1002,39 @@ export function activate(context: ExtensionContext) {
         },
     ];
 
+    lookWhileTypingTarget = context.workspaceState.get<LookWhileTypingTarget>(
+        LOOK_WHILE_TYPING_TARGET_STATE_KEY
+    );
     updateShadowContext();
+    updateLookWhileTypingContext();
 
     context.subscriptions.push(
         registerShadowInlineCompletionProvider(),
+        window.onDidChangeVisibleTextEditors(updateLookWhileTypingContext),
         ...textEditorCommandMap.map(({ command, callback }) => {
             return commands.registerTextEditorCommand(command, callback);
         }),
         commands.registerCommand('extension.swimming.exitShadowRewrite', exitShadowRewrite),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_SELECT_TARGET_COMMAND,
+            () => selectLookWhileTypingTarget(context)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_CLEAR_TARGET_COMMAND,
+            () => clearLookWhileTypingTarget(context)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_SCROLL_UP_COMMAND,
+            () => scrollLookWhileTyping(-1)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_SCROLL_DOWN_COMMAND,
+            () => scrollLookWhileTyping(1)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_CLOSE_TARGET_COMMAND,
+            () => closeLookWhileTypingTarget(context)
+        ),
         commands.registerCommand(SHADOW_DELETE_LEFT_COMMAND, handleShadowDeleteLeft),
         commands.registerCommand(SHADOW_ENTER_COMMAND, handleShadowEnter),
         commands.registerCommand(SHADOW_TAB_COMMAND, handleShadowTab),

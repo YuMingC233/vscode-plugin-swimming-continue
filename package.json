@@ -19,7 +19,12 @@
     "onCommand:extension.swimming.closeWriteCode",
     "onCommand:extension.swimming.pauseWriteCode",
     "onCommand:extension.swimming.switchWriteMode",
-    "onCommand:extension.swimming.exitShadowRewrite"
+    "onCommand:extension.swimming.exitShadowRewrite",
+    "onCommand:extension.swimming.selectLookWhileTypingTarget",
+    "onCommand:extension.swimming.clearLookWhileTypingTarget",
+    "onCommand:extension.swimming.scrollLookWhileTypingUp",
+    "onCommand:extension.swimming.scrollLookWhileTypingDown",
+    "onCommand:extension.swimming.closeLookWhileTypingTarget"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -47,6 +52,26 @@
       {
         "command": "extension.swimming.exitShadowRewrite",
         "title": "Exit Shadow Rewriting"
+      },
+      {
+        "command": "extension.swimming.selectLookWhileTypingTarget",
+        "title": "边打边看：选择工作窗口"
+      },
+      {
+        "command": "extension.swimming.clearLookWhileTypingTarget",
+        "title": "边打边看：清除工作窗口"
+      },
+      {
+        "command": "extension.swimming.scrollLookWhileTypingUp",
+        "title": "边打边看：向上滚动工作窗口"
+      },
+      {
+        "command": "extension.swimming.scrollLookWhileTypingDown",
+        "title": "边打边看：向下滚动工作窗口"
+      },
+      {
+        "command": "extension.swimming.closeLookWhileTypingTarget",
+        "title": "边打边看：关闭工作窗口"
       }
     ],
     "menus": {
@@ -74,6 +99,16 @@
         {
           "when": "editorFocus && vscodePluginSwimming.shadowActive",
           "command": "extension.swimming.exitShadowRewrite",
+          "group": "navigation"
+        },
+        {
+          "when": "editorFocus",
+          "command": "extension.swimming.selectLookWhileTypingTarget",
+          "group": "navigation"
+        },
+        {
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "command": "extension.swimming.clearLookWhileTypingTarget",
           "group": "navigation"
         }
       ]
@@ -108,6 +143,21 @@
         "command": "extension.swimming.shadowTab",
         "key": "tab",
         "when": "editorTextFocus && vscodePluginSwimming.shadowActive"
+      },
+      {
+        "command": "extension.swimming.scrollLookWhileTypingUp",
+        "key": "-",
+        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
+      },
+      {
+        "command": "extension.swimming.scrollLookWhileTypingDown",
+        "key": "=",
+        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
+      },
+      {
+        "command": "extension.swimming.closeLookWhileTypingTarget",
+        "key": "\\",
+        "when": "editorTextFocus && vscodePluginSwimming.lookWhileTypingTargetVisible"
       }
     ],
     "configuration": {
@@ -138,6 +188,12 @@
           "type": "boolean",
           "default": false,
           "description": "shadow Rewriting时，是否要求用Enter换行、用Tab推进新行缩进"
+        },
+        "vscodePluginSwimming.lookWhileTypingStepLines": {
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "边打边看时，每次滚动工作窗口的行数"
         }
       }
     }
