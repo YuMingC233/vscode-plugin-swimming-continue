@@ -24,7 +24,9 @@
     "onCommand:extension.swimming.clearLookWhileTypingTarget",
     "onCommand:extension.swimming.scrollLookWhileTypingUp",
     "onCommand:extension.swimming.scrollLookWhileTypingDown",
-    "onCommand:extension.swimming.closeLookWhileTypingTarget"
+    "onCommand:extension.swimming.closeLookWhileTypingTarget",
+    "onCommand:extension.swimming.reopenLookWhileTypingTarget",
+    "onCommand:extension.swimming.renameLookWhileTypingTarget"
   ],
   "main": "./out/extension.js",
   "l10n": "./l10n",
@@ -73,6 +75,14 @@
       {
         "command": "extension.swimming.closeLookWhileTypingTarget",
         "title": "%command.closeLookWhileTypingTarget%"
+      },
+      {
+        "command": "extension.swimming.reopenLookWhileTypingTarget",
+        "title": "%command.reopenLookWhileTypingTarget%"
+      },
+      {
+        "command": "extension.swimming.renameLookWhileTypingTarget",
+        "title": "%command.renameLookWhileTypingTarget%"
       }
     ],
     "submenus": [
@@ -142,6 +152,16 @@
         {
           "command": "extension.swimming.closeLookWhileTypingTarget",
           "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
+        },
+        {
+          "command": "extension.swimming.renameLookWhileTypingTarget",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "group": "4_lookWhileTyping"
+        },
+        {
+          "command": "extension.swimming.reopenLookWhileTypingTarget",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingClosedTargetAvailable",
           "group": "4_lookWhileTyping"
         }
       ]
@@ -233,6 +253,13 @@
           "maxLength": 1,
           "default": "\\",
           "description": "%configuration.lookWhileTypingCloseTargetKey%"
+        },
+        "vscodePluginSwimming.lookWhileTypingReopenTargetKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "`",
+          "description": "%configuration.lookWhileTypingReopenTargetKey%"
         }
       }
     }

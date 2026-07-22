@@ -11,13 +11,19 @@ export type LookWhileTypingTargetReference = {
     viewColumn: number | undefined;
 };
 
+export type LookWhileTypingDocumentRename = {
+    oldUri: string;
+    newUri: string;
+};
+
 export type LookWhileTypingControls = {
     scrollUpKey: string;
     scrollDownKey: string;
     closeTargetKey: string;
+    reopenTargetKey: string;
 };
 
-export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget';
+export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget' | 'reopenTarget';
 
 export function getLookWhileTypingAction(
     typedText: string,
@@ -34,8 +40,42 @@ export function getLookWhileTypingAction(
     if (typedText === controls.closeTargetKey) {
         matchingActions.push('closeTarget');
     }
+    if (typedText === controls.reopenTargetKey) {
+        matchingActions.push('reopenTarget');
+    }
 
     return matchingActions.length === 1 ? matchingActions[0] : undefined;
+}
+
+export function getLookWhileTypingLabelPattern(relativePath: string) {
+    return `**/${relativePath.replaceAll('\\', '/')}`;
+}
+
+export function getLookWhileTypingTargetLabel(
+    relativePath: string,
+    customLabel: string | undefined
+) {
+    return customLabel || relativePath;
+}
+
+export function getLookWhileTypingRenamedDocumentUri(
+    documentUri: string,
+    renames: LookWhileTypingDocumentRename[]
+) {
+    let renamedDocumentUri = documentUri;
+    let hasChanged = false;
+
+    for (const { oldUri, newUri } of renames) {
+        if (renamedDocumentUri === oldUri) {
+            renamedDocumentUri = newUri;
+            hasChanged = true;
+        } else if (renamedDocumentUri.startsWith(`${oldUri}/`)) {
+            renamedDocumentUri = `${newUri}${renamedDocumentUri.slice(oldUri.length)}`;
+            hasChanged = true;
+        }
+    }
+
+    return hasChanged ? renamedDocumentUri : undefined;
 }
 
 export function isLookWhileTypingTarget(

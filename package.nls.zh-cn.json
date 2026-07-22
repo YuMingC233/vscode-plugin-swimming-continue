@@ -1,5 +1,5 @@
 {
-  "extension.displayName": "划水",
+  "extension.displayName": "swimming",
   "extension.description": "在 VS Code 中重写代码，让输入过程看起来更自然。",
   "submenu.swimming": "划水",
   "command.rewriteCode": "代码重写",
@@ -13,7 +13,9 @@
   "command.scrollLookWhileTypingUp": "边打边看：向上滚动工作编辑器",
   "command.scrollLookWhileTypingDown": "边打边看：向下滚动工作编辑器",
   "command.closeLookWhileTypingTarget": "边打边看：关闭工作编辑器",
-  "configuration.title": "划水设置",
+  "command.reopenLookWhileTypingTarget": "边打边看：重新打开工作编辑器",
+  "command.renameLookWhileTypingTarget": "边打边看：重命名工作编辑器",
+  "configuration.title": "swimming setting",
   "configuration.rewriteSpeed": "重写速度，单位为毫秒。",
   "configuration.rewriteMode": "重写模式：once 或 cycle。",
   "configuration.shadowRequireShiftForSymbols": "影子重写遇到符号时，要求先输入一个符号字符再映射。",
@@ -22,5 +24,6 @@
   "configuration.lookWhileTypingStepLines": "边打边看时，每次滚动工作编辑器的行数。",
   "configuration.lookWhileTypingScrollUpKey": "边打边看时，向上滚动工作编辑器的单字符按键。",
   "configuration.lookWhileTypingScrollDownKey": "边打边看时，向下滚动工作编辑器的单字符按键。",
-  "configuration.lookWhileTypingCloseTargetKey": "边打边看时，关闭工作编辑器的单字符按键。"
+  "configuration.lookWhileTypingCloseTargetKey": "边打边看时，关闭工作编辑器的单字符按键。",
+  "configuration.lookWhileTypingReopenTargetKey": "边打边看时，重新打开最近关闭工作编辑器的单字符按键。"
 }

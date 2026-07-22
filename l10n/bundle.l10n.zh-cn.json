@@ -1,6 +1,7 @@
 {
   "Open the working file beside the typing editor before selecting it.": "请先在输入编辑器旁边打开工作文件，再选择它。",
   "Editor group {0}": "编辑器组 {0}",
+  "{0} (Editor group {1})": "{0}（编辑器组 {1}）",
   "unknown": "未知",
   "Select the editor to scroll while you type.": "选择输入时需要滚动的编辑器。",
   "Look While Typing target selected.": "已选择边打边看的工作编辑器。",
@@ -12,5 +13,10 @@
   "Shadow Rewriting started. Press Esc to exit.": "影子重写已开始。按 Esc 退出。",
   "Shadow Rewriting stopped.": "影子重写已停止。",
   "Code rewriting is not active, so it cannot be paused.": "代码重写尚未启动，无法暂停。",
-  "Switched to {0} mode.": "已切换到 {0} 模式。"
+  "Switched to {0} mode.": "已切换到 {0} 模式。",
+  "No closed Look While Typing target to reopen.": "没有可重新打开的边打边看工作编辑器。",
+  "The closed Look While Typing target could not be reopened.": "无法重新打开已关闭的边打边看工作编辑器。",
+  "Select a Look While Typing target before naming it.": "请先选择边打边看的工作编辑器，再为其命名。",
+  "Enter a custom label for the working editor. Leave empty to restore its file name.": "输入工作编辑器的自定义标签。留空可恢复文件名。",
+  "Custom working editor labels are available only for files in the workspace.": "仅工作区内的文件可以使用自定义工作编辑器标签。"
 }

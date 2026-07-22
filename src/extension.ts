@@ -1,6 +1,7 @@
 import {
     CancellationToken,
     commands,
+    ConfigurationTarget,
     ExtensionContext,
     InlineCompletionContext,
     InlineCompletionItem,
@@ -15,6 +16,7 @@ import {
     TextEditorEdit,
     TextEditorRevealType,
     TextDocument,
+    Uri,
     window,
     workspace,
 } from 'vscode';
@@ -29,7 +31,10 @@ import {
 } from './shadowInline';
 import {
     getLookWhileTypingAction,
+    getLookWhileTypingLabelPattern,
+    getLookWhileTypingRenamedDocumentUri,
     getLookWhileTypingScrollLine,
+    getLookWhileTypingTargetLabel,
     isLookWhileTypingTarget,
 } from './lookWhileTyping';
 
@@ -40,12 +45,16 @@ const SHADOW_DELETE_LEFT_COMMAND = 'extension.swimming.shadowDeleteLeft';
 const SHADOW_ENTER_COMMAND = 'extension.swimming.shadowEnter';
 const SHADOW_TAB_COMMAND = 'extension.swimming.shadowTab';
 const LOOK_WHILE_TYPING_CONTEXT = 'vscodePluginSwimming.lookWhileTypingTargetVisible';
+const LOOK_WHILE_TYPING_CLOSED_TARGET_CONTEXT = 'vscodePluginSwimming.lookWhileTypingClosedTargetAvailable';
 const LOOK_WHILE_TYPING_TARGET_STATE_KEY = 'lookWhileTyping.target';
+const LOOK_WHILE_TYPING_CLOSED_TARGET_STATE_KEY = 'lookWhileTyping.closedTarget';
 const LOOK_WHILE_TYPING_SELECT_TARGET_COMMAND = 'extension.swimming.selectLookWhileTypingTarget';
 const LOOK_WHILE_TYPING_CLEAR_TARGET_COMMAND = 'extension.swimming.clearLookWhileTypingTarget';
 const LOOK_WHILE_TYPING_SCROLL_UP_COMMAND = 'extension.swimming.scrollLookWhileTypingUp';
 const LOOK_WHILE_TYPING_SCROLL_DOWN_COMMAND = 'extension.swimming.scrollLookWhileTypingDown';
 const LOOK_WHILE_TYPING_CLOSE_TARGET_COMMAND = 'extension.swimming.closeLookWhileTypingTarget';
+const LOOK_WHILE_TYPING_REOPEN_TARGET_COMMAND = 'extension.swimming.reopenLookWhileTypingTarget';
+const LOOK_WHILE_TYPING_RENAME_TARGET_COMMAND = 'extension.swimming.renameLookWhileTypingTarget';
 const INLINE_SUGGEST_TRIGGER_COMMAND = 'editor.action.inlineSuggest.trigger';
 const INLINE_SUGGEST_HIDE_COMMAND = 'editor.action.inlineSuggest.hide';
 
@@ -61,6 +70,12 @@ type RewriteSession = {
 type LookWhileTypingTarget = {
     documentUri: string;
     viewColumn: number | undefined;
+    customLabel?: string;
+    customLabelPattern?: string;
+    hadPreviousCustomLabel?: boolean;
+    previousCustomLabel?: string;
+    didEnableCustomLabels?: boolean;
+    previousCustomLabelsEnabled?: boolean;
 };
 
 function getReWriteSpeed() {
@@ -130,6 +145,10 @@ function getLookWhileTypingControls() {
             'vscodePluginSwimming.lookWhileTypingCloseTargetKey',
             '\\'
         ),
+        reopenTargetKey: getLookWhileTypingControlKey(
+            'vscodePluginSwimming.lookWhileTypingReopenTargetKey',
+            '`'
+        ),
     };
 }
 
@@ -156,6 +175,7 @@ const isWritingCodeMap: Map<string, boolean> = new Map();
 const shadowSessionMap: Map<string, RewriteSession> = new Map();
 const shadowInputQueue = new KeyedAsyncQueue();
 let lookWhileTypingTarget: LookWhileTypingTarget | undefined;
+let lastClosedLookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
 
 function getEditorKey(textEditor: TextEditor) {
@@ -179,6 +199,150 @@ function updateLookWhileTypingContext() {
         LOOK_WHILE_TYPING_CONTEXT,
         Boolean(getLookWhileTypingTargetEditor())
     );
+    void commands.executeCommand(
+        'setContext',
+        LOOK_WHILE_TYPING_CLOSED_TARGET_CONTEXT,
+        Boolean(lastClosedLookWhileTypingTarget)
+    );
+}
+
+async function persistLookWhileTypingTargets(context: ExtensionContext) {
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_TARGET_STATE_KEY,
+        lookWhileTypingTarget
+    );
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_CLOSED_TARGET_STATE_KEY,
+        lastClosedLookWhileTypingTarget
+    );
+}
+
+function getLookWhileTypingCustomLabelPattern(target: LookWhileTypingTarget) {
+    const targetUri = Uri.parse(target.documentUri);
+    if (!workspace.getWorkspaceFolder(targetUri)) {
+        return undefined;
+    }
+
+    return getLookWhileTypingLabelPattern(
+        workspace.asRelativePath(targetUri, false)
+    );
+}
+
+async function restoreLookWhileTypingCustomLabel(target: LookWhileTypingTarget) {
+    if (!target.customLabelPattern) {
+        return;
+    }
+
+    const targetUri = Uri.parse(target.documentUri);
+    const editorConfiguration = workspace.getConfiguration('workbench.editor', targetUri);
+    const currentPatterns = editorConfiguration.get<Record<string, string>>(
+        'customLabels.patterns'
+    ) ?? {};
+    if (currentPatterns[target.customLabelPattern] === target.customLabel) {
+        const restoredPatterns = { ...currentPatterns };
+        if (target.hadPreviousCustomLabel) {
+            restoredPatterns[target.customLabelPattern] = target.previousCustomLabel ?? '';
+        } else {
+            delete restoredPatterns[target.customLabelPattern];
+        }
+        await editorConfiguration.update(
+            'customLabels.patterns',
+            restoredPatterns,
+            ConfigurationTarget.Workspace
+        );
+    }
+
+    if (target.didEnableCustomLabels) {
+        await editorConfiguration.update(
+            'customLabels.enabled',
+            target.previousCustomLabelsEnabled,
+            ConfigurationTarget.Workspace
+        );
+    }
+
+    target.customLabelPattern = undefined;
+    target.hadPreviousCustomLabel = undefined;
+    target.previousCustomLabel = undefined;
+    target.didEnableCustomLabels = undefined;
+    target.previousCustomLabelsEnabled = undefined;
+}
+
+async function applyLookWhileTypingCustomLabel(target: LookWhileTypingTarget) {
+    if (!target.customLabel) {
+        return true;
+    }
+
+    const labelPattern = getLookWhileTypingCustomLabelPattern(target);
+    if (!labelPattern) {
+        return false;
+    }
+
+    const targetUri = Uri.parse(target.documentUri);
+    const editorConfiguration = workspace.getConfiguration('workbench.editor', targetUri);
+    const currentPatterns = editorConfiguration.get<Record<string, string>>(
+        'customLabels.patterns'
+    ) ?? {};
+    target.customLabelPattern = labelPattern;
+    target.hadPreviousCustomLabel = Object.hasOwn(currentPatterns, labelPattern);
+    target.previousCustomLabel = currentPatterns[labelPattern];
+    await editorConfiguration.update(
+        'customLabels.patterns',
+        { ...currentPatterns, [labelPattern]: target.customLabel },
+        ConfigurationTarget.Workspace
+    );
+
+    const customLabelsEnabled = editorConfiguration.get<boolean>('customLabels.enabled');
+    if (!customLabelsEnabled) {
+        const inspectedCustomLabels = editorConfiguration.inspect<boolean>(
+            'customLabels.enabled'
+        );
+        target.didEnableCustomLabels = true;
+        target.previousCustomLabelsEnabled = inspectedCustomLabels?.workspaceValue;
+        await editorConfiguration.update(
+            'customLabels.enabled',
+            true,
+            ConfigurationTarget.Workspace
+        );
+    }
+
+    return true;
+}
+
+async function updateLookWhileTypingTargetAfterWorkspaceRename(
+    context: ExtensionContext,
+    renamedFiles: readonly { oldUri: Uri; newUri: Uri }[]
+) {
+    const renames = renamedFiles.map(({ oldUri, newUri }) => {
+        return {
+            oldUri: oldUri.toString(),
+            newUri: newUri.toString(),
+        };
+    });
+    const targets = [lookWhileTypingTarget, lastClosedLookWhileTypingTarget]
+        .filter((target): target is LookWhileTypingTarget => Boolean(target));
+    let hasUpdatedTarget = false;
+
+    for (const target of targets) {
+        const renamedDocumentUri = getLookWhileTypingRenamedDocumentUri(
+            target.documentUri,
+            renames
+        );
+        if (!renamedDocumentUri) {
+            continue;
+        }
+
+        await restoreLookWhileTypingCustomLabel(target);
+        target.documentUri = renamedDocumentUri;
+        if (target.customLabel && !await applyLookWhileTypingCustomLabel(target)) {
+            target.customLabel = undefined;
+        }
+        hasUpdatedTarget = true;
+    }
+
+    if (hasUpdatedTarget) {
+        await persistLookWhileTypingTargets(context);
+        updateLookWhileTypingContext();
+    }
 }
 
 async function selectLookWhileTypingTarget(context: ExtensionContext) {
@@ -195,10 +359,20 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
 
     const selectedTarget = await window.showQuickPick(
         targetEditors.map((textEditor) => {
+            const relativePath = workspace.asRelativePath(textEditor.document.uri, false);
+            const selectedTarget = [lookWhileTypingTarget, lastClosedLookWhileTypingTarget]
+                .find((target) => {
+                    return target?.documentUri === getEditorKey(textEditor)
+                        && target.viewColumn === textEditor.viewColumn;
+                });
             return {
-                label: workspace.asRelativePath(textEditor.document.uri, false),
+                label: getLookWhileTypingTargetLabel(
+                    relativePath,
+                    selectedTarget?.customLabel
+                ),
                 description: l10n.t(
-                    'Editor group {0}',
+                    '{0} (Editor group {1})',
+                    relativePath,
                     textEditor.viewColumn ?? l10n.t('unknown')
                 ),
                 textEditor,
@@ -211,21 +385,29 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
         return;
     }
 
+    if (lookWhileTypingTarget) {
+        await restoreLookWhileTypingCustomLabel(lookWhileTypingTarget);
+    }
+    if (lastClosedLookWhileTypingTarget) {
+        await restoreLookWhileTypingCustomLabel(lastClosedLookWhileTypingTarget);
+    }
     lookWhileTypingTarget = {
         documentUri: getEditorKey(selectedTarget.textEditor),
         viewColumn: selectedTarget.textEditor.viewColumn,
     };
-    await context.workspaceState.update(
-        LOOK_WHILE_TYPING_TARGET_STATE_KEY,
-        lookWhileTypingTarget
-    );
+    lastClosedLookWhileTypingTarget = undefined;
+    await persistLookWhileTypingTargets(context);
     updateLookWhileTypingContext();
     return window.showInformationMessage(l10n.t('Look While Typing target selected.'));
 }
 
 async function clearLookWhileTypingTarget(context: ExtensionContext) {
+    if (lookWhileTypingTarget) {
+        await restoreLookWhileTypingCustomLabel(lookWhileTypingTarget);
+    }
     lookWhileTypingTarget = undefined;
-    await context.workspaceState.update(LOOK_WHILE_TYPING_TARGET_STATE_KEY, undefined);
+    lastClosedLookWhileTypingTarget = undefined;
+    await persistLookWhileTypingTargets(context);
     updateLookWhileTypingContext();
 }
 
@@ -249,6 +431,7 @@ function scrollLookWhileTyping(direction: -1 | 1) {
         stepLines: getLookWhileTypingStepLines(),
     });
     const targetPosition = new Position(targetLine, 0);
+    targetTextEditor.selection = new Selection(targetPosition, targetPosition);
     targetTextEditor.revealRange(
         new Range(targetPosition, targetPosition),
         TextEditorRevealType.InCenter
@@ -278,27 +461,89 @@ function getLookWhileTypingTargetTab() {
 }
 
 async function closeLookWhileTypingTarget(context: ExtensionContext) {
+    const target = lookWhileTypingTarget;
     const targetTab = getLookWhileTypingTargetTab();
-    if (!targetTab) {
+    if (!target || !targetTab) {
         updateLookWhileTypingContext();
         return;
     }
 
     const isClosed = await window.tabGroups.close(targetTab, true);
     if (isClosed) {
-        await clearLookWhileTypingTarget(context);
+        lookWhileTypingTarget = undefined;
+        lastClosedLookWhileTypingTarget = target;
+        await persistLookWhileTypingTargets(context);
+        updateLookWhileTypingContext();
     }
+}
+
+async function reopenLookWhileTypingTarget(context: ExtensionContext) {
+    const target = lastClosedLookWhileTypingTarget;
+    if (!target) {
+        return window.showInformationMessage(l10n.t('No closed Look While Typing target to reopen.'));
+    }
+
+    try {
+        const targetTextEditor = await window.showTextDocument(
+            Uri.parse(target.documentUri),
+            {
+                viewColumn: target.viewColumn,
+                preserveFocus: true,
+                preview: false,
+            }
+        );
+        target.viewColumn = targetTextEditor.viewColumn;
+        lookWhileTypingTarget = target;
+        lastClosedLookWhileTypingTarget = undefined;
+        await persistLookWhileTypingTargets(context);
+        updateLookWhileTypingContext();
+    } catch {
+        return window.showWarningMessage(
+            l10n.t('The closed Look While Typing target could not be reopened.')
+        );
+    }
+}
+
+async function renameLookWhileTypingTarget(context: ExtensionContext) {
+    const target = lookWhileTypingTarget;
+    if (!target) {
+        return window.showInformationMessage(
+            l10n.t('Select a Look While Typing target before naming it.')
+        );
+    }
+
+    const customLabel = await window.showInputBox({
+        prompt: l10n.t('Enter a custom label for the working editor. Leave empty to restore its file name.'),
+        value: target.customLabel ?? '',
+    });
+    if (customLabel === undefined) {
+        return;
+    }
+
+    await restoreLookWhileTypingCustomLabel(target);
+    target.customLabel = customLabel.trim() || undefined;
+    if (target.customLabel && !await applyLookWhileTypingCustomLabel(target)) {
+        target.customLabel = undefined;
+        return window.showWarningMessage(
+            l10n.t('Custom working editor labels are available only for files in the workspace.')
+        );
+    }
+
+    await persistLookWhileTypingTargets(context);
 }
 
 async function handleLookWhileTypingInput(
     context: ExtensionContext,
     typedText: string
 ) {
+    const action = getLookWhileTypingAction(typedText, getLookWhileTypingControls());
+    if (action === 'reopenTarget') {
+        await reopenLookWhileTypingTarget(context);
+        return true;
+    }
     if (!getLookWhileTypingTargetEditor()) {
         return false;
     }
-
-    const action = getLookWhileTypingAction(typedText, getLookWhileTypingControls());
     if (action === 'scrollUp') {
         scrollLookWhileTyping(-1);
         return true;
@@ -1078,12 +1323,18 @@ export function activate(context: ExtensionContext) {
     lookWhileTypingTarget = context.workspaceState.get<LookWhileTypingTarget>(
         LOOK_WHILE_TYPING_TARGET_STATE_KEY
     );
+    lastClosedLookWhileTypingTarget = context.workspaceState.get<LookWhileTypingTarget>(
+        LOOK_WHILE_TYPING_CLOSED_TARGET_STATE_KEY
+    );
     updateShadowContext();
     updateLookWhileTypingContext();
 
     context.subscriptions.push(
         registerShadowInlineCompletionProvider(),
         window.onDidChangeVisibleTextEditors(updateLookWhileTypingContext),
+        workspace.onDidRenameFiles(({ files }) => {
+            void updateLookWhileTypingTargetAfterWorkspaceRename(context, files);
+        }),
         ...textEditorCommandMap.map(({ command, callback }) => {
             return commands.registerTextEditorCommand(command, callback);
         }),
@@ -1107,6 +1358,14 @@ export function activate(context: ExtensionContext) {
         commands.registerCommand(
             LOOK_WHILE_TYPING_CLOSE_TARGET_COMMAND,
             () => closeLookWhileTypingTarget(context)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_REOPEN_TARGET_COMMAND,
+            () => reopenLookWhileTypingTarget(context)
+        ),
+        commands.registerCommand(
+            LOOK_WHILE_TYPING_RENAME_TARGET_COMMAND,
+            () => renameLookWhileTypingTarget(context)
         ),
         commands.registerCommand(SHADOW_DELETE_LEFT_COMMAND, handleShadowDeleteLeft),
         commands.registerCommand(SHADOW_ENTER_COMMAND, handleShadowEnter),

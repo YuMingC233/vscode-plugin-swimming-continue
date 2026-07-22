@@ -62,7 +62,41 @@ test('provides matching runtime translations for English and Simplified Chinese'
 
     assert.equal(packageJson.l10n, './l10n');
     assert.match(extensionSource, /l10n\.t\(/);
+    const runtimeMessages = [
+        ...extensionSource.matchAll(/l10n\.t\(\s*'([^']+)'/g),
+    ].map((match) => match[1]);
+    for (const message of runtimeMessages) {
+        assert.equal(typeof defaultBundle[message], 'string', 'missing English message: ' + message);
+        assert.equal(typeof chineseBundle[message], 'string', 'missing Chinese message: ' + message);
+    }
     for (const key of Object.keys(defaultBundle)) {
         assert.equal(typeof chineseBundle[key], 'string', `missing Chinese message: ${key}`);
     }
+});
+
+test('keeps Look While Typing controls as single-character settings', () => {
+    const properties = packageJson.contributes.configuration.properties;
+    const expectedSettings = [
+        ['vscodePluginSwimming.lookWhileTypingScrollUpKey', '-'],
+        ['vscodePluginSwimming.lookWhileTypingScrollDownKey', '='],
+        ['vscodePluginSwimming.lookWhileTypingCloseTargetKey', '\\'],
+        ['vscodePluginSwimming.lookWhileTypingReopenTargetKey', '`'],
+    ];
+
+    for (const [setting, defaultValue] of expectedSettings) {
+        assert.equal(properties[setting]?.default, defaultValue);
+    }
+
+    const lookWhileTypingCommands = [
+        'extension.swimming.scrollLookWhileTypingUp',
+        'extension.swimming.scrollLookWhileTypingDown',
+        'extension.swimming.closeLookWhileTypingTarget',
+        'extension.swimming.reopenLookWhileTypingTarget',
+    ];
+    assert.equal(
+        packageJson.contributes.keybindings.some((keybinding) => {
+            return lookWhileTypingCommands.includes(keybinding.command);
+        }),
+        false
+    );
 });

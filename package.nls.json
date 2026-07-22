@@ -13,6 +13,8 @@
   "command.scrollLookWhileTypingUp": "Look While Typing: Scroll Working Editor Up",
   "command.scrollLookWhileTypingDown": "Look While Typing: Scroll Working Editor Down",
   "command.closeLookWhileTypingTarget": "Look While Typing: Close Working Editor",
+  "command.reopenLookWhileTypingTarget": "Look While Typing: Reopen Working Editor",
+  "command.renameLookWhileTypingTarget": "Look While Typing: Rename Working Editor",
   "configuration.title": "Swimming",
   "configuration.rewriteSpeed": "Rewrite speed in milliseconds.",
   "configuration.rewriteMode": "Rewrite mode: once or cycle.",
@@ -22,5 +24,6 @@
   "configuration.lookWhileTypingStepLines": "Number of lines to scroll the working editor for each Look While Typing action.",
   "configuration.lookWhileTypingScrollUpKey": "Single-character key that scrolls the working editor up in Look While Typing.",
   "configuration.lookWhileTypingScrollDownKey": "Single-character key that scrolls the working editor down in Look While Typing.",
-  "configuration.lookWhileTypingCloseTargetKey": "Single-character key that closes the working editor in Look While Typing."
+  "configuration.lookWhileTypingCloseTargetKey": "Single-character key that closes the working editor in Look While Typing.",
+  "configuration.lookWhileTypingReopenTargetKey": "Single-character key that reopens the last closed working editor in Look While Typing."
 }

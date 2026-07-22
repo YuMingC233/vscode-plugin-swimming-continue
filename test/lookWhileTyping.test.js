@@ -3,7 +3,10 @@ const test = require('node:test');
 
 const {
     getLookWhileTypingAction,
+    getLookWhileTypingLabelPattern,
+    getLookWhileTypingRenamedDocumentUri,
     getLookWhileTypingScrollLine,
+    getLookWhileTypingTargetLabel,
     isLookWhileTypingTarget,
 } = require('../out/lookWhileTyping');
 
@@ -73,19 +76,63 @@ test('matches a close target by both document and editor group', () => {
     );
 });
 
-test('maps configured single-character controls and rejects conflicting keys', () => {
+test('maps configured single-character Look While Typing controls', () => {
     const controls = {
         scrollUpKey: '-',
         scrollDownKey: '=',
         closeTargetKey: '\\',
+        reopenTargetKey: '`',
     };
 
     assert.equal(getLookWhileTypingAction('-', controls), 'scrollUp');
     assert.equal(getLookWhileTypingAction('=', controls), 'scrollDown');
     assert.equal(getLookWhileTypingAction('\\', controls), 'closeTarget');
+    assert.equal(getLookWhileTypingAction('`', controls), 'reopenTarget');
     assert.equal(getLookWhileTypingAction('x', controls), undefined);
     assert.equal(
         getLookWhileTypingAction('-', { ...controls, scrollDownKey: '-' }),
         undefined
+    );
+});
+
+test('migrates a target document URI after file or folder workspace renames', () => {
+    assert.equal(
+        getLookWhileTypingRenamedDocumentUri('file:///work/old.ts', [{
+            oldUri: 'file:///work/old.ts',
+            newUri: 'file:///work/new.ts',
+        }]),
+        'file:///work/new.ts'
+    );
+    assert.equal(
+        getLookWhileTypingRenamedDocumentUri('file:///work/old-folder/a.ts', [{
+            oldUri: 'file:///work/old-folder',
+            newUri: 'file:///work/new-folder',
+        }]),
+        'file:///work/new-folder/a.ts'
+    );
+    assert.equal(
+        getLookWhileTypingRenamedDocumentUri('file:///work/other.ts', [{
+            oldUri: 'file:///work/old.ts',
+            newUri: 'file:///work/new.ts',
+        }]),
+        undefined
+    );
+});
+
+test('prefers a custom working editor label in the target picker', () => {
+    assert.equal(
+        getLookWhileTypingTargetLabel('src/worker.ts', 'Review queue'),
+        'Review queue'
+    );
+    assert.equal(
+        getLookWhileTypingTargetLabel('src/worker.ts', undefined),
+        'src/worker.ts'
+    );
+});
+
+test('creates a workspace-relative pattern for the custom target tab label', () => {
+    assert.equal(
+        getLookWhileTypingLabelPattern('notes\\review.md'),
+        '**/notes/review.md'
     );
 });
