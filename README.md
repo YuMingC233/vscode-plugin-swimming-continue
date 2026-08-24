@@ -58,6 +58,8 @@ code --install-extension ./swimming-local.vsix --force
 * 可以在 VS Code 设置中搜索 `lookWhileTypingScrollMode` 切换滚动方式：`line` 为跨文档行移动（默认），`cursor` 为移动工作窗口光标，适合自动换行后占据多行的超长文本
 * 右键选择 `边打边看：清除工作窗口` 后，三个按键都会恢复为普通输入
 
+普通 `Code Rewriting` 会先以 250–350ms 的随机间隔逐字输入每个单词的前 3 或 4 个字符，再一次补全该单词的剩余字符；写入空格后会随机停顿 750–1250ms，模拟人工输入与短暂思考。
+
 如果想要快捷键暂停代码重写，可以直接使用以下按键暂停：
 * win默认:ctrl+alt+shift+p
 * mac默认:alt+cmd+shift+p

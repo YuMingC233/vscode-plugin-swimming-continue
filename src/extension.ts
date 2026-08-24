@@ -40,6 +40,10 @@ import {
     getLookWhileTypingTargetLabel,
     isLookWhileTypingTarget,
 } from './lookWhileTyping';
+import {
+    createHumanRewritePlan,
+    HumanRewriteAction,
+} from './humanRewrite';
 import { getNextRoundRobinIndex } from './multiRewrite';
 
 const TYPE_COMMAND = 'type';
@@ -73,6 +77,8 @@ type RewriteSession = {
     initCharacter: number;
     anchorOffset: number;
     initAnchorOffset: number;
+    humanActions?: HumanRewriteAction[];
+    humanActionIndex?: number;
 };
 
 type LookWhileTypingTarget = {
@@ -86,13 +92,10 @@ type LookWhileTypingTarget = {
     previousCustomLabelsEnabled?: boolean;
 };
 
-function getReWriteSpeed() {
-    const reWriteSpeed = workspace
-        .getConfiguration()
-        .get<number>('vscodePluginSwimming.reWriteSpeed');
-
-    return typeof reWriteSpeed === 'number' ? reWriteSpeed : 0;
-}
+type EditorRewriteTarget = {
+    textEditor: TextEditor;
+    session: RewriteSession;
+};
 
 function getShadowRequireSymbolKey() {
     const requireSymbolKey = workspace
@@ -801,6 +804,18 @@ function createRewriteSession(
     };
 }
 
+function initializeHumanRewritePlan(session: RewriteSession) {
+    session.humanActions = createHumanRewritePlan(session.beforeText);
+    session.humanActionIndex = 0;
+}
+
+function getCurrentHumanRewriteAction(session: RewriteSession) {
+    if (!session.humanActions) {
+        initializeHumanRewritePlan(session);
+    }
+    return session.humanActions?.[session.humanActionIndex ?? 0];
+}
+
 function getWrittenRange(session: RewriteSession) {
     return new Range(
         new Position(session.initLine, session.initCharacter),
@@ -848,6 +863,10 @@ function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
             session.index = 0;
             session.line = session.initLine;
             session.character = session.initCharacter;
+            session.anchorOffset = session.initAnchorOffset;
+            if (session.humanActions) {
+                initializeHumanRewritePlan(session);
+            }
             setEditorCursor(textEditor, getSessionPosition(session));
         }
         return isEdited;
@@ -870,13 +889,19 @@ function revealCurrentPosition(textEditor: TextEditor, session: RewriteSession) 
     return nowPosition;
 }
 
-function writeNextTargetChunk(textEditor: TextEditor, session: RewriteSession) {
+function writeNextTargetChunk(
+    textEditor: TextEditor,
+    session: RewriteSession,
+    requestedTargetText?: string
+) {
     const nowPosition = revealCurrentPosition(textEditor, session);
-    let targetText = session.beforeText[session.index];
+    let targetText = requestedTargetText ?? session.beforeText[session.index];
 
-    if (session.beforeText.startsWith('\r\n', session.index)) {
+    if (requestedTargetText === undefined
+        && session.beforeText.startsWith('\r\n', session.index)) {
         targetText = '\r\n';
-    } else if (session.beforeText.startsWith('\n', session.index)) {
+    } else if (requestedTargetText === undefined
+        && session.beforeText.startsWith('\n', session.index)) {
         targetText = '\n';
     }
 
@@ -1060,6 +1085,7 @@ function rewriteCodeWithStartAndEnd({
         textEditor,
     });
     const session = createRewriteSession(textEditor, selectionRange);
+    initializeHumanRewritePlan(session);
 
     edit.delete(selectionRange);
 
@@ -1068,7 +1094,7 @@ function rewriteCodeWithStartAndEnd({
         finishWriting(editorKey);
     };
 
-    const runWrite = function() {
+    const runWrite = function(delay: number) {
         const inputTimeout: NodeJS.Timeout = setTimeout(() => {
             if (!shouldContinueRewrite(
                 isWritingCodeMap.get(editorKey),
@@ -1079,7 +1105,7 @@ function rewriteCodeWithStartAndEnd({
 
             if (isWriteCodePauseMap.get(editorKey)) {
                 return textEditor.edit(() => undefined)
-                    .then(() => runWrite(), (reason) => {
+                    .then(() => runWrite(delay), (reason) => {
                         recycleWrite(inputTimeout);
                         throw new Error(String(reason));
                     });
@@ -1088,7 +1114,10 @@ function rewriteCodeWithStartAndEnd({
             if (session.index >= session.beforeText.length) {
                 if (getRewriteMode() === RewriteMode.Cycle) {
                     return resetRewriteSession(textEditor, session)
-                        .then(() => runWrite(), (reason) => {
+                        .then(() => {
+                            const firstAction = getCurrentHumanRewriteAction(session);
+                            runWrite(firstAction?.delayAfter ?? 250);
+                        }, (reason) => {
                             recycleWrite(inputTimeout);
                             throw new Error(String(reason));
                         });
@@ -1097,15 +1126,128 @@ function rewriteCodeWithStartAndEnd({
                 return recycleWrite(inputTimeout);
             }
 
-            writeNextTargetChunk(textEditor, session)
-                .then(() => runWrite(), (reason) => {
+            const action = getCurrentHumanRewriteAction(session);
+            if (!action) {
+                return recycleWrite(inputTimeout);
+            }
+            writeNextTargetChunk(textEditor, session, action.text)
+                .then((isEdited) => {
+                    if (isEdited) {
+                        session.humanActionIndex = (session.humanActionIndex ?? 0) + 1;
+                    }
+                    runWrite(action.delayAfter);
+                }, (reason) => {
                     recycleWrite(inputTimeout);
                     throw new Error(String(reason));
                 });
-        }, getReWriteSpeed());
+        }, delay);
     };
 
-    runWrite();
+    const firstAction = getCurrentHumanRewriteAction(session);
+    runWrite(firstAction?.delayAfter ?? 250);
+}
+
+async function rewriteCodeAcrossEditors(textEditors: readonly TextEditor[]) {
+    const targets: EditorRewriteTarget[] = textEditors.map((textEditor) => {
+        const selectionRange = new Range(
+            textEditor.selection.start,
+            textEditor.selection.end
+        );
+        return {
+            textEditor,
+            session: createRewriteSession(textEditor, selectionRange),
+        };
+    });
+    for (const target of targets) {
+        initializeHumanRewritePlan(target.session);
+    }
+
+    if (targets.some(({ textEditor }) => isWritingCodeMap.get(getEditorKey(textEditor)))) {
+        return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
+    }
+
+    const preparedTargets: EditorRewriteTarget[] = [];
+    for (const target of targets) {
+        const editorKey = getEditorKey(target.textEditor);
+        isWritingCodeMap.set(editorKey, true);
+        isWriteCodePauseMap.set(editorKey, false);
+        const isDeleted = await target.textEditor.edit((editBuilder) => {
+            editBuilder.delete(new Range(
+                target.textEditor.selection.start,
+                target.textEditor.selection.end
+            ));
+        });
+        if (!isDeleted) {
+            finishWriting(editorKey);
+            continue;
+        }
+        setEditorCursor(target.textEditor, getSessionPosition(target.session));
+        preparedTargets.push(target);
+    }
+
+    let nextTargetIndex = 0;
+    const runWrite = (delay: number) => {
+        setTimeout(async () => {
+            for (const target of preparedTargets) {
+                const editorKey = getEditorKey(target.textEditor);
+                if (target.textEditor.document.isClosed) {
+                    finishWriting(editorKey);
+                } else if (target.session.index >= target.session.beforeText.length
+                    && getRewriteMode() === RewriteMode.Once) {
+                    finishWriting(editorKey);
+                }
+            }
+
+            const targetIndex = getNextRoundRobinIndex(
+                preparedTargets.map(({ textEditor }) => {
+                    const editorKey = getEditorKey(textEditor);
+                    return isWritingCodeMap.get(editorKey) === true
+                        && !isWriteCodePauseMap.get(editorKey);
+                }),
+                nextTargetIndex
+            );
+            if (targetIndex === undefined) {
+                if (preparedTargets.some(({ textEditor }) => {
+                    return isWritingCodeMap.get(getEditorKey(textEditor)) === true;
+                })) {
+                    runWrite(250);
+                }
+                return;
+            }
+
+            const target = preparedTargets[targetIndex];
+            nextTargetIndex = (targetIndex + 1) % preparedTargets.length;
+            if (target.session.index >= target.session.beforeText.length) {
+                const isReset = await resetRewriteSession(target.textEditor, target.session);
+                if (!isReset) {
+                    finishWriting(getEditorKey(target.textEditor));
+                    runWrite(250);
+                    return;
+                }
+            }
+
+            const action = getCurrentHumanRewriteAction(target.session);
+            if (!action) {
+                finishWriting(getEditorKey(target.textEditor));
+                runWrite(250);
+                return;
+            }
+            const isEdited = await writeNextTargetChunk(
+                target.textEditor,
+                target.session,
+                action.text
+            );
+            if (isEdited) {
+                target.session.humanActionIndex = (target.session.humanActionIndex ?? 0) + 1;
+            }
+            runWrite(action.delayAfter);
+        }, delay);
+    };
+
+    const firstAction = preparedTargets.length
+        ? getCurrentHumanRewriteAction(preparedTargets[0].session)
+        : undefined;
+    runWrite(firstAction?.delayAfter ?? 250);
 }
 
 function rewriteCode(
@@ -1113,6 +1255,12 @@ function rewriteCode(
     edit: TextEditorEdit,
     _args: any[]
 ) {
+    const selectedEditors = getSelectedRewriteEditors(textEditor);
+    if (selectedEditors.length > 1) {
+        void rewriteCodeAcrossEditors(selectedEditors);
+        return;
+    }
+
     const editorKey = getEditorKey(textEditor);
     if (isWritingCodeMap.get(editorKey)) {
         return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
