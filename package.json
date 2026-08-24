@@ -151,12 +151,12 @@
         },
         {
           "command": "extension.swimming.closeLookWhileTypingTarget",
-          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingEditorTargetVisible",
           "group": "4_lookWhileTyping"
         },
         {
           "command": "extension.swimming.renameLookWhileTypingTarget",
-          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingTargetVisible",
+          "when": "editorFocus && vscodePluginSwimming.lookWhileTypingEditorTargetVisible",
           "group": "4_lookWhileTyping"
         },
         {

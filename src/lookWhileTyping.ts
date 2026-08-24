@@ -25,6 +25,12 @@ export type LookWhileTypingControls = {
 
 export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget' | 'reopenTarget';
 
+export function getLookWhileTypingTerminalScrollCommand(direction: -1 | 1) {
+    return direction < 0
+        ? 'workbench.action.terminal.scrollUp'
+        : 'workbench.action.terminal.scrollDown';
+}
+
 export function getLookWhileTypingAction(
     typedText: string,
     controls: LookWhileTypingControls
