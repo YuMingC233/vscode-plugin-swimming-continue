@@ -15,7 +15,6 @@ import {
     TextEditor,
     TextEditorEdit,
     TextEditorRevealType,
-    TextEditorSelectionChangeKind,
     TextDocument,
     Uri,
     window,
@@ -27,11 +26,10 @@ import {
     getCurrentShadowLineRemainder,
     getGhostTextForCursor,
     getShadowInputCharacters,
-    isShadowPrefixAligned as isTargetPrefixAligned,
     KeyedAsyncQueue,
-    shouldAbandonShadowSession,
-    shouldAbandonShadowSessionAfterSelectionChange,
     shouldContinueRewrite,
+    shouldUseShadowInput,
+    transformShadowAnchorOffset,
 } from './shadowInline';
 import {
     getLookWhileTypingAction,
@@ -42,6 +40,7 @@ import {
     getLookWhileTypingTargetLabel,
     isLookWhileTypingTarget,
 } from './lookWhileTyping';
+import { getNextRoundRobinIndex } from './multiRewrite';
 
 const TYPE_COMMAND = 'type';
 const DEFAULT_TYPE_COMMAND = 'default:type';
@@ -72,6 +71,8 @@ type RewriteSession = {
     character: number;
     initLine: number;
     initCharacter: number;
+    anchorOffset: number;
+    initAnchorOffset: number;
 };
 
 type LookWhileTypingTarget = {
@@ -189,12 +190,26 @@ const isWriteCodePauseMap: Map<string, boolean> = new Map();
 const isWritingCodeMap: Map<string, boolean> = new Map();
 const shadowSessionMap: Map<string, RewriteSession> = new Map();
 const shadowInputQueue = new KeyedAsyncQueue();
+const shadowProgrammaticEditKeys = new Set<string>();
 let lookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let lastClosedLookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
+let shadowRoundRobinOrder: string[] = [];
+let shadowRoundRobinIndex = 0;
 
 function getEditorKey(textEditor: TextEditor) {
     return textEditor.document.uri.toString();
+}
+
+function getSelectedRewriteEditors(activeTextEditor: TextEditor) {
+    const selectedEditors = window.visibleTextEditors.filter((textEditor, index, editors) => {
+        return !textEditor.selection.isEmpty
+            && editors.findIndex((candidate) => {
+                return getEditorKey(candidate) === getEditorKey(textEditor);
+            }) === index;
+    });
+
+    return selectedEditors.length > 1 ? selectedEditors : [activeTextEditor];
 }
 
 function getLookWhileTypingTargetEditor() {
@@ -629,6 +644,12 @@ function finishWriting(editorKey: string) {
 
 function clearShadowSession(editorKey: string) {
     shadowSessionMap.delete(editorKey);
+    shadowRoundRobinOrder = shadowRoundRobinOrder.filter((key) => key !== editorKey);
+    if (shadowRoundRobinOrder.length) {
+        shadowRoundRobinIndex %= shadowRoundRobinOrder.length;
+    } else {
+        shadowRoundRobinIndex = 0;
+    }
     finishWriting(editorKey);
     updateShadowContext();
     refreshInlineSuggestion();
@@ -639,33 +660,102 @@ function clearAllShadowSessions() {
         finishWriting(editorKey);
     }
     shadowSessionMap.clear();
+    shadowRoundRobinOrder = [];
+    shadowRoundRobinIndex = 0;
     updateShadowContext();
     refreshInlineSuggestion();
 }
 
-function handleShadowSelectionChange(
-    textEditor: TextEditor,
-    selections: readonly Selection[],
-    isUserNavigation: boolean
-) {
-    const editorKey = getEditorKey(textEditor);
-    const shadowSession = shadowSessionMap.get(editorKey);
-    if (!shadowSession) {
+function getShadowInputTarget(sourceEditor: TextEditor) {
+    const sourceSession = shadowSessionMap.get(getEditorKey(sourceEditor));
+    if (!sourceSession || !canAdvanceShadowSession(sourceEditor, sourceSession)) {
+        return undefined;
+    }
+
+    const targetEditors = shadowRoundRobinOrder.map((editorKey) => {
+        return window.visibleTextEditors.find((textEditor) => {
+            return getEditorKey(textEditor) === editorKey;
+        });
+    });
+    const targetIndex = getNextRoundRobinIndex(
+        shadowRoundRobinOrder.map((editorKey, index) => {
+            const session = shadowSessionMap.get(editorKey);
+            const textEditor = targetEditors[index];
+            if (!session || !textEditor || !canAdvanceShadowSession(textEditor, session)) {
+                return false;
+            }
+            return getRewriteMode() === RewriteMode.Cycle
+                || session.index < session.beforeText.length;
+        }),
+        shadowRoundRobinIndex
+    );
+    if (targetIndex === undefined) {
+        return undefined;
+    }
+
+    const editorKey = shadowRoundRobinOrder[targetIndex];
+    const textEditor = targetEditors[targetIndex];
+    const session = shadowSessionMap.get(editorKey);
+    if (!textEditor || !session) {
+        return undefined;
+    }
+
+    shadowRoundRobinIndex = (targetIndex + 1) % shadowRoundRobinOrder.length;
+    if (session.index >= session.beforeText.length) {
+        restartShadowCycleAtAnchor(session);
+    }
+    return { editorKey, textEditor, session };
+}
+
+function completeShadowGroupIfNeeded() {
+    if (getRewriteMode() === RewriteMode.Cycle) {
         return;
     }
 
-    const cursors = selections.map(({ active }) => ({
-        line: active.line,
-        character: active.character,
-    }));
-    if (shouldAbandonShadowSessionAfterSelectionChange(
-        shadowSession,
-        cursors,
-        isUserNavigation
-    )) {
-        clearShadowSession(editorKey);
-         window.showInformationMessage(l10n.t('Shadow Rewriting stopped, cause by user moved input cursor. can be manual restart.'));
+    const isComplete = shadowRoundRobinOrder.length > 0
+        && shadowRoundRobinOrder.every((editorKey) => {
+            const session = shadowSessionMap.get(editorKey);
+            return !session || session.index >= session.beforeText.length;
+        });
+    if (isComplete) {
+        clearAllShadowSessions();
     }
+}
+
+function handleShadowSelectionChange(
+    textEditor: TextEditor,
+    _selections: readonly Selection[]
+) {
+    const editorKey = getEditorKey(textEditor);
+    if (!shadowSessionMap.has(editorKey)) {
+        return;
+    }
+
+    refreshInlineSuggestion();
+}
+
+function handleShadowDocumentChange(
+    document: TextDocument,
+    contentChanges: readonly {
+        rangeOffset: number;
+        rangeLength: number;
+        text: string;
+    }[]
+) {
+    const editorKey = document.uri.toString();
+    const session = shadowSessionMap.get(editorKey);
+    if (!session || shadowProgrammaticEditKeys.has(editorKey)) {
+        return;
+    }
+
+    session.anchorOffset = transformShadowAnchorOffset(
+        session.anchorOffset,
+        contentChanges
+    );
+    const anchor = document.positionAt(session.anchorOffset);
+    session.line = anchor.line;
+    session.character = anchor.character;
+    refreshInlineSuggestion();
 }
 
 function showPauseinfo(textEditor: TextEditor) {
@@ -694,7 +784,11 @@ function getSelectionRangeByStartAndEnd({
     return selectionRange;
 }
 
-function createRewriteSession(textEditor: TextEditor, selectionRange: Range) {
+function createRewriteSession(
+    textEditor: TextEditor,
+    selectionRange: Range
+): RewriteSession {
+    const anchorOffset = textEditor.document.offsetAt(selectionRange.start);
     return {
         beforeText: textEditor.document.getText(selectionRange),
         index: 0,
@@ -702,6 +796,8 @@ function createRewriteSession(textEditor: TextEditor, selectionRange: Range) {
         character: selectionRange.start.character,
         initLine: selectionRange.start.line,
         initCharacter: selectionRange.start.character,
+        anchorOffset,
+        initAnchorOffset: anchorOffset,
     };
 }
 
@@ -716,17 +812,36 @@ function getSessionPosition(session: RewriteSession) {
     return new Position(session.line, session.character);
 }
 
-function getSessionStartPosition(session: RewriteSession) {
-    return new Position(session.initLine, session.initCharacter);
-}
-
 function setEditorCursor(textEditor: TextEditor, position: Position) {
     textEditor.selection = new Selection(position, position);
 }
 
+function runShadowAwareEdit(
+    textEditor: TextEditor,
+    callback: (editBuilder: TextEditorEdit) => void
+) {
+    const editorKey = getEditorKey(textEditor);
+    const hasShadowSession = shadowSessionMap.has(editorKey);
+    if (hasShadowSession) {
+        shadowProgrammaticEditKeys.add(editorKey);
+    }
+
+    return textEditor.edit(callback).then((isEdited) => {
+        if (hasShadowSession) {
+            shadowProgrammaticEditKeys.delete(editorKey);
+        }
+        return isEdited;
+    }, (reason) => {
+        if (hasShadowSession) {
+            shadowProgrammaticEditKeys.delete(editorKey);
+        }
+        throw reason;
+    });
+}
+
 function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
     const writtenRange = getWrittenRange(session);
-    return textEditor.edit((editBuilder) => {
+    return runShadowAwareEdit(textEditor, (editBuilder) => {
         editBuilder.delete(writtenRange);
     }).then((isEdited) => {
         if (isEdited) {
@@ -737,6 +852,13 @@ function resetRewriteSession(textEditor: TextEditor, session: RewriteSession) {
         }
         return isEdited;
     });
+}
+
+function restartShadowCycleAtAnchor(session: RewriteSession) {
+    session.index = 0;
+    session.initLine = session.line;
+    session.initCharacter = session.character;
+    session.initAnchorOffset = session.anchorOffset;
 }
 
 function revealCurrentPosition(textEditor: TextEditor, session: RewriteSession) {
@@ -758,7 +880,7 @@ function writeNextTargetChunk(textEditor: TextEditor, session: RewriteSession) {
         targetText = '\n';
     }
 
-    return textEditor.edit((editBuilder) => {
+    return runShadowAwareEdit(textEditor, (editBuilder) => {
         editBuilder.insert(nowPosition, targetText);
     }).then((isEdited) => {
         if (commitShadowSessionEdit(session, targetText, isEdited)) {
@@ -772,39 +894,10 @@ function isSymbolCharacter(text: string) {
     return text.length > 0 && !/^[\p{L}\p{N}_\s]$/u.test(text);
 }
 
-function getExpectedShadowPrefix(session: RewriteSession) {
-    return session.beforeText.slice(0, session.index);
-}
-
 function getCurrentShadowLineIndentationRemainder(session: RewriteSession) {
     const currentLineRemainder = getCurrentShadowLineRemainder(session);
     const indentationMatch = currentLineRemainder.match(/^[\t ]+/);
     return indentationMatch ? indentationMatch[0] : '';
-}
-
-function getShadowCursorOffset(textEditor: TextEditor, session: RewriteSession) {
-    return textEditor.document.offsetAt(getSessionPosition(session));
-}
-
-function getActualShadowPrefix(textEditor: TextEditor, session: RewriteSession) {
-    const startPosition = getSessionStartPosition(session);
-    const actualPosition = textEditor.selection.active;
-
-    if (textEditor.document.offsetAt(actualPosition) < textEditor.document.offsetAt(startPosition)) {
-        return '';
-    }
-
-    return textEditor.document.getText(new Range(startPosition, actualPosition));
-}
-
-function getActualShadowPrefixAtSessionPosition(
-    textEditor: TextEditor,
-    session: RewriteSession
-) {
-    return textEditor.document.getText(new Range(
-        getSessionStartPosition(session),
-        getSessionPosition(session)
-    ));
 }
 
 function isExpectingLineBreak(session: RewriteSession) {
@@ -839,53 +932,12 @@ function requiresManualIndentation(textEditor: TextEditor, session: RewriteSessi
     return getCurrentLineIndentUnit(textEditor, session).length > 0;
 }
 
-function hasShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
-    const expectedPrefix = getExpectedShadowPrefix(session);
-    const actualPrefix = getActualShadowPrefix(textEditor, session);
-    return actualPrefix.startsWith(expectedPrefix) && actualPrefix.length > expectedPrefix.length;
-}
-
-function isShadowPrefixAligned(textEditor: TextEditor, session: RewriteSession) {
-    return isTargetPrefixAligned(session, getActualShadowPrefix(textEditor, session));
-}
-
 function canAdvanceShadowSession(textEditor: TextEditor, session: RewriteSession) {
-    return isShadowPrefixAligned(textEditor, session)
-        && textEditor.document.offsetAt(textEditor.selection.active) === getShadowCursorOffset(textEditor, session);
-}
-
-function shouldAbandonShadowSessionAfterExternalEdit(
-    textEditor: TextEditor,
-    session: RewriteSession
-) {
-    return shouldAbandonShadowSession(
-        session,
-        getActualShadowPrefix(textEditor, session),
-        textEditor.document.offsetAt(textEditor.selection.active) === getShadowCursorOffset(
-            textEditor,
-            session
-        )
-    );
-}
-
-function deleteShadowOverflow(textEditor: TextEditor, session: RewriteSession) {
-    const expectedOffset = textEditor.document.offsetAt(getSessionPosition(session));
-    const actualPosition = textEditor.selection.active;
-    const actualOffset = textEditor.document.offsetAt(actualPosition);
-
-    if (actualOffset <= expectedOffset) {
-        return false;
-    }
-
-    const startPosition = textEditor.document.positionAt(actualOffset - 1);
-    return textEditor.edit((editBuilder) => {
-        editBuilder.delete(new Range(startPosition, actualPosition));
-    }).then((isEdited) => {
-        if (isEdited) {
-            setEditorCursor(textEditor, startPosition);
-        }
-        return isEdited;
-    });
+    const cursors = textEditor.selections.map(({ active }) => ({
+        line: active.line,
+        character: active.character,
+    }));
+    return shouldUseShadowInput(session, cursors);
 }
 
 function insertTargetText(textEditor: TextEditor, session: RewriteSession, targetText: string) {
@@ -894,7 +946,7 @@ function insertTargetText(textEditor: TextEditor, session: RewriteSession, targe
     }
 
     const nowPosition = revealCurrentPosition(textEditor, session);
-    return textEditor.edit((editBuilder) => {
+    return runShadowAwareEdit(textEditor, (editBuilder) => {
         editBuilder.insert(nowPosition, targetText);
     }).then((isEdited) => {
         if (commitShadowSessionEdit(session, targetText, isEdited)) {
@@ -923,22 +975,6 @@ function canShadowTypeAdvance(typedText: string, session: RewriteSession) {
     }
 
     return [...typedText].some((character) => isSymbolCharacter(character));
-}
-
-function showShadowOutOfSyncMessage(textEditor: TextEditor, session: RewriteSession) {
-    if (hasShadowOverflow(textEditor, session)) {
-        return window.showWarningMessage(
-            l10n.t(
-                'Shadow Rewriting detected extra characters. Press Backspace to clean them before continuing.'
-            )
-        );
-    }
-
-    return window.showWarningMessage(
-        l10n.t(
-            'Shadow Rewriting is out of sync with the target text. Stop and restart this session if needed.'
-        )
-    );
 }
 
 function canUseGenericShadowTyping(textEditor: TextEditor, session: RewriteSession) {
@@ -975,16 +1011,9 @@ async function advanceShadowWithTypedInput(
     refreshInlineSuggestion();
 }
 
-function completeShadowSessionIfNeeded(editorKey: string, shadowSession: RewriteSession) {
-    if (shadowSession.index >= shadowSession.beforeText.length
-        && getRewriteMode() === RewriteMode.Once) {
-        clearShadowSession(editorKey);
-    }
-}
-
 async function handleShadowLineBreak(textEditor: TextEditor, shadowSession: RewriteSession) {
     if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-        return showShadowOutOfSyncMessage(textEditor, shadowSession);
+        return;
     }
 
     if (!isExpectingLineBreak(shadowSession)) {
@@ -1001,7 +1030,7 @@ async function handleShadowLineBreak(textEditor: TextEditor, shadowSession: Rewr
 
 async function handleShadowIndentation(textEditor: TextEditor, shadowSession: RewriteSession) {
     if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-        return showShadowOutOfSyncMessage(textEditor, shadowSession);
+        return;
     }
 
     const indentUnit = getCurrentLineIndentUnit(textEditor, shadowSession);
@@ -1102,6 +1131,12 @@ function shadowRewriteCode(
     edit: TextEditorEdit,
     _args: any[]
 ) {
+    const selectedEditors = getSelectedRewriteEditors(textEditor);
+    if (selectedEditors.length > 1) {
+        void shadowRewriteCodeAcrossEditors(selectedEditors);
+        return;
+    }
+
     const editorKey = getEditorKey(textEditor);
     if (isWritingCodeMap.get(editorKey)) {
         return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
@@ -1120,11 +1155,60 @@ function shadowRewriteCode(
 
     edit.delete(selectionRange);
     shadowSessionMap.set(editorKey, session);
+    shadowRoundRobinOrder = [editorKey];
+    shadowRoundRobinIndex = 0;
     isWritingCodeMap.set(editorKey, true);
     isWriteCodePauseMap.set(editorKey, false);
     updateShadowContext();
     refreshInlineSuggestion();
     window.showInformationMessage(l10n.t('Shadow Rewriting started. Press Esc to exit.'));
+}
+
+async function shadowRewriteCodeAcrossEditors(textEditors: readonly TextEditor[]) {
+    const targets = textEditors.map((textEditor) => {
+        const selectionRange = new Range(
+            textEditor.selection.start,
+            textEditor.selection.end
+        );
+        return {
+            textEditor,
+            selectionRange,
+            session: createRewriteSession(textEditor, selectionRange),
+        };
+    }).filter(({ session }) => session.beforeText.length > 0);
+
+    if (!targets.length) {
+        return window.showInformationMessage(l10n.t('No code available for Shadow Rewriting.'));
+    }
+    if (targets.some(({ textEditor }) => isWritingCodeMap.get(getEditorKey(textEditor)))) {
+        return window.showInformationMessage(l10n.t('Code rewriting is already in progress.'));
+    }
+
+    const preparedKeys: string[] = [];
+    for (const target of targets) {
+        const isDeleted = await target.textEditor.edit((editBuilder) => {
+            editBuilder.delete(target.selectionRange);
+        });
+        if (!isDeleted) {
+            continue;
+        }
+
+        const editorKey = getEditorKey(target.textEditor);
+        shadowSessionMap.set(editorKey, target.session);
+        isWritingCodeMap.set(editorKey, true);
+        isWriteCodePauseMap.set(editorKey, false);
+        setEditorCursor(target.textEditor, getSessionPosition(target.session));
+        preparedKeys.push(editorKey);
+    }
+
+    shadowRoundRobinOrder = preparedKeys;
+    shadowRoundRobinIndex = 0;
+    updateShadowContext();
+    refreshInlineSuggestion();
+    window.showInformationMessage(l10n.t(
+        'Shadow Rewriting started across {0} editors. Press Esc to exit.',
+        preparedKeys.length
+    ));
 }
 
 function exitShadowRewrite() {
@@ -1138,7 +1222,11 @@ function exitShadowRewrite() {
         return;
     }
 
-    clearShadowSession(editorKey);
+    if (shadowRoundRobinOrder.length > 1) {
+        clearAllShadowSessions();
+    } else {
+        clearShadowSession(editorKey);
+    }
     window.showInformationMessage(l10n.t('Shadow Rewriting stopped.'));
 }
 
@@ -1163,7 +1251,15 @@ function pauseWriteCode(
             l10n.t('Code rewriting is not active, so it cannot be paused.')
         );
     }
-    isWriteCodePauseMap.set(editorKey, !isWriteCodePauseMap.get(editorKey));
+    const isPaused = !isWriteCodePauseMap.get(editorKey);
+    if (shadowRoundRobinOrder.length > 1
+        && shadowRoundRobinOrder.includes(editorKey)) {
+        for (const targetKey of shadowRoundRobinOrder) {
+            isWriteCodePauseMap.set(targetKey, isPaused);
+        }
+    } else {
+        isWriteCodePauseMap.set(editorKey, isPaused);
+    }
     showPauseinfo(textEditor);
 }
 
@@ -1201,16 +1297,17 @@ async function handleShadowType(
     }
 
     const editorKey = getEditorKey(textEditor);
-    const shadowSession = shadowSessionMap.get(editorKey);
+    const sourceSession = shadowSessionMap.get(editorKey);
 
-    if (!shadowSession || isWriteCodePauseMap.get(editorKey)) {
+    if (!sourceSession || isWriteCodePauseMap.get(editorKey)) {
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
     }
 
-    return shadowInputQueue.enqueue(editorKey, async () => {
-        if (shadowSessionMap.get(editorKey) !== shadowSession
+    const queueKey = shadowRoundRobinOrder.length > 1 ? 'shadow:multi' : editorKey;
+    return shadowInputQueue.enqueue(queueKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== sourceSession
             || isWriteCodePauseMap.get(editorKey)) {
-            return;
+            return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
         }
 
         if (textEditor.document.isClosed) {
@@ -1218,36 +1315,29 @@ async function handleShadowType(
             return;
         }
 
-        if (shouldAbandonShadowSessionAfterExternalEdit(textEditor, shadowSession)) {
-            clearShadowSession(editorKey);
+        if (!canAdvanceShadowSession(textEditor, sourceSession)) {
             return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
         }
 
         const typedCharacters = getShadowInputCharacters(typedText);
         for (let index = 0; index < typedCharacters.length; index += 1) {
-            if (shadowSessionMap.get(editorKey) !== shadowSession) {
-                return;
+            if (!shadowSessionMap.has(editorKey)) {
+                const remainingText = typedCharacters.slice(index).join('');
+                return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: remainingText });
             }
 
-            if (shadowSession.index >= shadowSession.beforeText.length) {
-                if (getRewriteMode() === RewriteMode.Cycle) {
-                    const isReset = await resetRewriteSession(textEditor, shadowSession);
-                    if (!isReset) {
-                        return;
-                    }
-                } else {
-                    clearShadowSession(editorKey);
-                    const remainingText = typedCharacters.slice(index).join('');
-                    return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: remainingText });
-                }
+            const target = getShadowInputTarget(textEditor);
+            if (!target) {
+                completeShadowGroupIfNeeded();
+                const remainingText = typedCharacters.slice(index).join('');
+                return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: remainingText });
             }
-
             await advanceShadowWithTypedInput(
-                textEditor,
-                shadowSession,
+                target.textEditor,
+                target.session,
                 typedCharacters[index]
             );
-            completeShadowSessionIfNeeded(editorKey, shadowSession);
+            completeShadowGroupIfNeeded();
         }
     });
 }
@@ -1264,22 +1354,18 @@ async function handleShadowDeleteLeft() {
         return commands.executeCommand(DEFAULT_DELETE_LEFT_COMMAND);
     }
 
-    return shadowInputQueue.enqueue(editorKey, async () => {
+    const queueKey = shadowRoundRobinOrder.length > 1 ? 'shadow:multi' : editorKey;
+    return shadowInputQueue.enqueue(queueKey, async () => {
         if (shadowSessionMap.get(editorKey) !== shadowSession) {
-            return;
-        }
-
-        if (shouldAbandonShadowSessionAfterExternalEdit(textEditor, shadowSession)) {
-            clearShadowSession(editorKey);
             return commands.executeCommand(DEFAULT_DELETE_LEFT_COMMAND);
         }
 
-        if (!hasShadowOverflow(textEditor, shadowSession)) {
-            return;
+        if (!canAdvanceShadowSession(textEditor, shadowSession)) {
+            return commands.executeCommand(DEFAULT_DELETE_LEFT_COMMAND);
         }
 
-        await deleteShadowOverflow(textEditor, shadowSession);
-        refreshInlineSuggestion();
+        // Keep completed target text intact while the cursor is at the active anchor.
+        return;
     });
 }
 
@@ -1290,29 +1376,35 @@ async function handleShadowEnter() {
     }
 
     const editorKey = getEditorKey(textEditor);
-    const shadowSession = shadowSessionMap.get(editorKey);
-    if (!shadowSession) {
+    const sourceSession = shadowSessionMap.get(editorKey);
+    if (!sourceSession) {
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: '\n' });
     }
 
-    return shadowInputQueue.enqueue(editorKey, async () => {
-        if (shadowSessionMap.get(editorKey) !== shadowSession) {
+    const queueKey = shadowRoundRobinOrder.length > 1 ? 'shadow:multi' : editorKey;
+    return shadowInputQueue.enqueue(queueKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== sourceSession) {
             return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: '\n' });
         }
 
-        if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-            clearShadowSession(editorKey);
+        if (!canAdvanceShadowSession(textEditor, sourceSession)) {
+            return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: '\n' });
+        }
+
+        const target = getShadowInputTarget(textEditor);
+        if (!target) {
+            completeShadowGroupIfNeeded();
             return commands.executeCommand(DEFAULT_TYPE_COMMAND, { text: '\n' });
         }
 
         if (!getShadowRequireManualLineBreaksAndIndentation()) {
-            await advanceShadowWithTypedInput(textEditor, shadowSession, '\n');
-            completeShadowSessionIfNeeded(editorKey, shadowSession);
+            await advanceShadowWithTypedInput(target.textEditor, target.session, '\n');
+            completeShadowGroupIfNeeded();
             return;
         }
 
-        await handleShadowLineBreak(textEditor, shadowSession);
-        completeShadowSessionIfNeeded(editorKey, shadowSession);
+        await handleShadowLineBreak(target.textEditor, target.session);
+        completeShadowGroupIfNeeded();
     });
 }
 
@@ -1323,29 +1415,35 @@ async function handleShadowTab() {
     }
 
     const editorKey = getEditorKey(textEditor);
-    const shadowSession = shadowSessionMap.get(editorKey);
-    if (!shadowSession) {
+    const sourceSession = shadowSessionMap.get(editorKey);
+    if (!sourceSession) {
         return commands.executeCommand(DEFAULT_TAB_COMMAND);
     }
 
-    return shadowInputQueue.enqueue(editorKey, async () => {
-        if (shadowSessionMap.get(editorKey) !== shadowSession) {
+    const queueKey = shadowRoundRobinOrder.length > 1 ? 'shadow:multi' : editorKey;
+    return shadowInputQueue.enqueue(queueKey, async () => {
+        if (shadowSessionMap.get(editorKey) !== sourceSession) {
             return commands.executeCommand(DEFAULT_TAB_COMMAND);
         }
 
-        if (!canAdvanceShadowSession(textEditor, shadowSession)) {
-            clearShadowSession(editorKey);
+        if (!canAdvanceShadowSession(textEditor, sourceSession)) {
+            return commands.executeCommand(DEFAULT_TAB_COMMAND);
+        }
+
+        const target = getShadowInputTarget(textEditor);
+        if (!target) {
+            completeShadowGroupIfNeeded();
             return commands.executeCommand(DEFAULT_TAB_COMMAND);
         }
 
         if (!getShadowRequireManualLineBreaksAndIndentation()) {
-            await advanceShadowWithTypedInput(textEditor, shadowSession, '\t');
-            completeShadowSessionIfNeeded(editorKey, shadowSession);
+            await advanceShadowWithTypedInput(target.textEditor, target.session, '\t');
+            completeShadowGroupIfNeeded();
             return;
         }
 
-        await handleShadowIndentation(textEditor, shadowSession);
-        completeShadowSessionIfNeeded(editorKey, shadowSession);
+        await handleShadowIndentation(target.textEditor, target.session);
+        completeShadowGroupIfNeeded();
     });
 }
 
@@ -1367,11 +1465,6 @@ const shadowInlineCompletionProvider: InlineCompletionItemProvider = {
 
         const shadowSession = shadowSessionMap.get(getEditorKey(textEditor));
         if (!shadowSession || isWriteCodePauseMap.get(getEditorKey(textEditor))) {
-            return [];
-        }
-
-        const actualPrefix = getActualShadowPrefixAtSessionPosition(textEditor, shadowSession);
-        if (!isTargetPrefixAligned(shadowSession, actualPrefix)) {
             return [];
         }
 
@@ -1437,13 +1530,11 @@ export function activate(context: ExtensionContext) {
     context.subscriptions.push(
         registerShadowInlineCompletionProvider(),
         window.onDidChangeVisibleTextEditors(updateLookWhileTypingContext),
-        window.onDidChangeTextEditorSelection(({ textEditor, selections, kind }) => {
-            handleShadowSelectionChange(
-                textEditor,
-                selections,
-                kind === TextEditorSelectionChangeKind.Keyboard
-                    || kind === TextEditorSelectionChangeKind.Mouse
-            );
+        window.onDidChangeTextEditorSelection(({ textEditor, selections }) => {
+            handleShadowSelectionChange(textEditor, selections);
+        }),
+        workspace.onDidChangeTextDocument(({ document, contentChanges }) => {
+            handleShadowDocumentChange(document, contentChanges);
         }),
         workspace.onDidRenameFiles(({ files }) => {
             void updateLookWhileTypingTargetAfterWorkspaceRename(context, files);
