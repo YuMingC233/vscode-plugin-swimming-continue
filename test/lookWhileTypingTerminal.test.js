@@ -2,9 +2,17 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+    getLookWhileTypingInputTokens,
     getLookWhileTypingTerminalInputSequence,
     getLookWhileTypingTerminalScrollCommand,
 } = require('../out/lookWhileTyping');
+
+const controls = {
+    scrollUpKey: '-',
+    scrollDownKey: '=',
+    closeTargetKey: '\\',
+    reopenTargetKey: '`',
+};
 
 test('maps Look While Typing terminal scrolling to VS Code terminal commands', () => {
     assert.equal(
@@ -41,4 +49,13 @@ test('maps terminal cursor and page navigation in the requested direction', () =
         getLookWhileTypingTerminalInputSequence(-1, 'pageKeys', 5),
         '\x1b[5~'
     );
+});
+
+test('recognizes control keys when VS Code batches them with normal input', () => {
+    assert.deepEqual(getLookWhileTypingInputTokens('a-=b', controls), [
+        { text: 'a', action: undefined },
+        { text: '-', action: 'scrollUp' },
+        { text: '=', action: 'scrollDown' },
+        { text: 'b', action: undefined },
+    ]);
 });

@@ -34,6 +34,7 @@ import {
 } from './shadowInline';
 import {
     getLookWhileTypingAction,
+    getLookWhileTypingInputTokens,
     getLookWhileTypingLabelPattern,
     getLookWhileTypingRenamedDocumentUri,
     getLookWhileTypingCursorScrollPosition,
@@ -695,11 +696,10 @@ async function renameLookWhileTypingTarget(context: ExtensionContext) {
     await persistLookWhileTypingTargets(context);
 }
 
-async function handleLookWhileTypingInput(
+async function handleLookWhileTypingAction(
     context: ExtensionContext,
-    typedText: string
+    action: ReturnType<typeof getLookWhileTypingAction>
 ) {
-    const action = getLookWhileTypingAction(typedText, getLookWhileTypingControls());
     if (action === 'reopenTarget') {
         await reopenLookWhileTypingTarget(context);
         return true;
@@ -723,6 +723,25 @@ async function handleLookWhileTypingInput(
     }
 
     return false;
+}
+
+async function getUnhandledLookWhileTypingInput(
+    context: ExtensionContext,
+    typedText: string
+) {
+    let unhandledText = '';
+    const inputTokens = getLookWhileTypingInputTokens(
+        typedText,
+        getLookWhileTypingControls()
+    );
+
+    for (const { text, action } of inputTokens) {
+        if (!action || !await handleLookWhileTypingAction(context, action)) {
+            unhandledText += text;
+        }
+    }
+
+    return unhandledText;
 }
 
 function updateShadowContext() {
@@ -1541,27 +1560,29 @@ async function handleShadowType(
         return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
     }
 
-    const typedText = typeof args.text === 'string' ? args.text : '';
+    let typedText = typeof args.text === 'string' ? args.text : '';
     if (!typedText) {
         return;
     }
 
-    if (await handleLookWhileTypingInput(context, typedText)) {
+    typedText = await getUnhandledLookWhileTypingInput(context, typedText);
+    if (!typedText) {
         return;
     }
+    const unhandledArgs = { ...args, text: typedText };
 
     const editorKey = getEditorKey(textEditor);
     const sourceSession = shadowSessionMap.get(editorKey);
 
     if (!sourceSession || isWriteCodePauseMap.get(editorKey)) {
-        return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
+        return commands.executeCommand(DEFAULT_TYPE_COMMAND, unhandledArgs);
     }
 
     const queueKey = shadowRoundRobinOrder.length > 1 ? 'shadow:multi' : editorKey;
     return shadowInputQueue.enqueue(queueKey, async () => {
         if (shadowSessionMap.get(editorKey) !== sourceSession
             || isWriteCodePauseMap.get(editorKey)) {
-            return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
+            return commands.executeCommand(DEFAULT_TYPE_COMMAND, unhandledArgs);
         }
 
         if (textEditor.document.isClosed) {
@@ -1570,7 +1591,7 @@ async function handleShadowType(
         }
 
         if (!canAdvanceShadowSession(textEditor, sourceSession)) {
-            return commands.executeCommand(DEFAULT_TYPE_COMMAND, args);
+            return commands.executeCommand(DEFAULT_TYPE_COMMAND, unhandledArgs);
         }
 
         const typedCharacters = getShadowInputCharacters(typedText);

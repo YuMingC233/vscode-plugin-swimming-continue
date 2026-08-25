@@ -32,6 +32,11 @@ export type LookWhileTypingTerminalNavigationMode =
 
 export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget' | 'reopenTarget';
 
+export type LookWhileTypingInputToken = {
+    text: string;
+    action: LookWhileTypingAction | undefined;
+};
+
 export function getLookWhileTypingTerminalScrollCommand(direction: -1 | 1) {
     return direction < 0
         ? 'workbench.action.terminal.scrollUp'
@@ -58,6 +63,16 @@ export function getLookWhileTypingAction(
     }
 
     return matchingActions.length === 1 ? matchingActions[0] : undefined;
+}
+
+export function getLookWhileTypingInputTokens(
+    typedText: string,
+    controls: LookWhileTypingControls
+): LookWhileTypingInputToken[] {
+    return [...typedText].map((text) => ({
+        text,
+        action: getLookWhileTypingAction(text, controls),
+    }));
 }
 
 export function getLookWhileTypingLabelPattern(relativePath: string) {
