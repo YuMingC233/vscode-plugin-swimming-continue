@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+    getLookWhileTypingCloseTargetKind,
     getLookWhileTypingInputTokens,
     getLookWhileTypingTerminalInputSequence,
     getLookWhileTypingTerminalScrollCommand,
@@ -58,4 +59,10 @@ test('recognizes control keys when VS Code batches them with normal input', () =
         { text: '=', action: 'scrollDown' },
         { text: 'b', action: undefined },
     ]);
+});
+
+test('closes terminal targets even when they are displayed as editor tabs', () => {
+    assert.equal(getLookWhileTypingCloseTargetKind(false, true), 'terminal');
+    assert.equal(getLookWhileTypingCloseTargetKind(true, false), 'editor');
+    assert.equal(getLookWhileTypingCloseTargetKind(false, false), undefined);
 });

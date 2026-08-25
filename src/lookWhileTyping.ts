@@ -37,6 +37,18 @@ export type LookWhileTypingInputToken = {
     action: LookWhileTypingAction | undefined;
 };
 
+export type LookWhileTypingCloseTargetKind = 'editor' | 'terminal';
+
+export function getLookWhileTypingCloseTargetKind(
+    hasEditorTarget: boolean,
+    hasTerminalTarget: boolean
+): LookWhileTypingCloseTargetKind | undefined {
+    if (hasTerminalTarget) {
+        return 'terminal';
+    }
+    return hasEditorTarget ? 'editor' : undefined;
+}
+
 export function getLookWhileTypingTerminalScrollCommand(direction: -1 | 1) {
     return direction < 0
         ? 'workbench.action.terminal.scrollUp'

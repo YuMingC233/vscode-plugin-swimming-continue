@@ -34,6 +34,7 @@ import {
 } from './shadowInline';
 import {
     getLookWhileTypingAction,
+    getLookWhileTypingCloseTargetKind,
     getLookWhileTypingInputTokens,
     getLookWhileTypingLabelPattern,
     getLookWhileTypingRenamedDocumentUri,
@@ -641,6 +642,20 @@ async function closeLookWhileTypingTarget(context: ExtensionContext) {
     }
 }
 
+async function closeLookWhileTypingTerminal(context: ExtensionContext) {
+    const targetTerminal = getLookWhileTypingTargetTerminal();
+    if (!targetTerminal) {
+        updateLookWhileTypingContext();
+        return;
+    }
+
+    lookWhileTypingTerminal = undefined;
+    lookWhileTypingTerminalName = undefined;
+    targetTerminal.dispose();
+    await persistLookWhileTypingTargets(context);
+    updateLookWhileTypingContext();
+}
+
 async function reopenLookWhileTypingTarget(context: ExtensionContext) {
     const target = lastClosedLookWhileTypingTarget;
     if (!target) {
@@ -717,9 +732,19 @@ async function handleLookWhileTypingAction(
         await scrollLookWhileTypingTarget(1);
         return true;
     }
-    if (action === 'closeTarget' && targetEditor) {
-        await closeLookWhileTypingTarget(context);
-        return true;
+    if (action === 'closeTarget') {
+        const closeTargetKind = getLookWhileTypingCloseTargetKind(
+            Boolean(targetEditor),
+            Boolean(targetTerminal)
+        );
+        if (closeTargetKind === 'terminal') {
+            await closeLookWhileTypingTerminal(context);
+            return true;
+        }
+        if (closeTargetKind === 'editor') {
+            await closeLookWhileTypingTarget(context);
+            return true;
+        }
     }
 
     return false;
@@ -1815,6 +1840,8 @@ export function activate(context: ExtensionContext) {
         window.onDidCloseTerminal((terminal) => {
             if (terminal === lookWhileTypingTerminal) {
                 lookWhileTypingTerminal = undefined;
+                lookWhileTypingTerminalName = undefined;
+                void persistLookWhileTypingTargets(context);
             }
             updateLookWhileTypingContext();
         }),
