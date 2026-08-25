@@ -55,11 +55,12 @@ code --install-extension ./swimming-local.vsix --force
 * 在正在输入的编辑器右键选择 `边打边看：选择工作窗口`，然后选择需要滚动的工作文件或终端
 * 焦点仍停留在正在输入的编辑器时，默认按 `-` 向上滚动、`=` 向下滚动、`\` 关闭工作窗口、`` ` `` 重新打开最近关闭的工作窗口
 * 滚动时会同步更新工作窗口的光标位置，重新聚焦后可继续从当前观看位置阅读
-* 终端目标复用 `-`、`=` 设置，并通过终端单行滚动命令翻页，输入焦点仍保留在代码编辑器
+* 终端目标复用 `-`、`=` 设置，输入焦点仍保留在代码编辑器；默认 `w3m` 模式会向目标终端发送大写 `K/J`，直接小幅滚动 w3m 页面，而不是只移动终端历史视图
 * 在右键菜单的 `Swimming` 子菜单中选择 `边打边看：重命名工作编辑器`，可为工作区文件设置自定义标签页名称
 * 可以在 VS Code 设置中搜索 `lookWhileTypingScrollUpKey`、`lookWhileTypingScrollDownKey`、`lookWhileTypingCloseTargetKey`、`lookWhileTypingReopenTargetKey` 自定义四个单字符按键
 * 可以在 VS Code 设置中搜索 `lookWhileTypingStepLines` 调整每次滚动的行数
 * 可以在 VS Code 设置中搜索 `lookWhileTypingScrollMode` 切换滚动方式：`line` 为跨文档行移动（默认），`cursor` 为移动工作窗口光标，适合自动换行后占据多行的超长文本
+* 可以在 VS Code 设置中搜索 `lookWhileTypingTerminalNavigationMode` 切换终端控制方式；普通终端历史滚动可选 `scrollback`，其他 TUI 可尝试标准方向键、应用模式方向键或 Page Up/Page Down
 * 右键选择 `边打边看：清除工作窗口` 后，四个按键都会恢复为普通输入
 
 普通 `Code Rewriting` 会先以 250–350ms 的随机间隔逐字输入每个单词的前 3 或 4 个字符，再一次补全该单词的剩余字符；写入空格后会随机停顿 750–1250ms，模拟人工输入与短暂思考。

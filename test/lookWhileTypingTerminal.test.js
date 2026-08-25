@@ -17,6 +17,17 @@ test('maps Look While Typing terminal scrolling to VS Code terminal commands', (
     );
 });
 
+test('uses w3m screen scrolling keys instead of moving its link cursor', () => {
+    assert.equal(
+        getLookWhileTypingTerminalInputSequence(-1, 'w3m', 3),
+        'KKK'
+    );
+    assert.equal(
+        getLookWhileTypingTerminalInputSequence(1, 'w3m', 2),
+        'JJ'
+    );
+});
+
 test('maps terminal cursor and page navigation in the requested direction', () => {
     assert.equal(
         getLookWhileTypingTerminalInputSequence(-1, 'cursorKeys', 2),

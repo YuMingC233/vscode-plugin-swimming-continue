@@ -24,6 +24,7 @@ export type LookWhileTypingControls = {
 };
 
 export type LookWhileTypingTerminalNavigationMode =
+    | 'w3m'
     | 'scrollback'
     | 'cursorKeys'
     | 'applicationCursorKeys'
@@ -198,6 +199,8 @@ export function getLookWhileTypingTerminalInputSequence(
     const repeatCount = Math.max(1, Math.floor(stepLines));
 
     switch (mode) {
+        case 'w3m':
+            return (direction < 0 ? 'K' : 'J').repeat(repeatCount);
         case 'cursorKeys':
             return (direction < 0 ? '\x1b[A' : '\x1b[B').repeat(repeatCount);
         case 'applicationCursorKeys':

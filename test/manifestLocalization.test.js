@@ -115,13 +115,22 @@ test('offers general terminal navigation modes', () => {
         'vscodePluginSwimming.lookWhileTypingTerminalNavigationMode'
     ];
 
-    assert.deepEqual(terminalNavigationMode.enum, [
+    assert.deepEqual(terminalNavigationMode.enum.slice(1), [
         'scrollback',
         'cursorKeys',
         'applicationCursorKeys',
         'pageKeys',
     ]);
-    assert.equal(terminalNavigationMode.default, 'scrollback');
+});
+
+test('defaults terminal navigation to w3m', () => {
+    const configuration = packageJson.contributes.configuration.properties;
+    const terminalNavigationMode = configuration[
+        'vscodePluginSwimming.lookWhileTypingTerminalNavigationMode'
+    ];
+
+    assert.equal(terminalNavigationMode.default, 'w3m');
+    assert.equal(terminalNavigationMode.enum[0], 'w3m');
 });
 
 test('documents the complete local VSIX packaging and installation workflow', () => {

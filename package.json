@@ -273,18 +273,20 @@
         "vscodePluginSwimming.lookWhileTypingTerminalNavigationMode": {
           "type": "string",
           "enum": [
+            "w3m",
             "scrollback",
             "cursorKeys",
             "applicationCursorKeys",
             "pageKeys"
           ],
           "enumDescriptions": [
+            "%configuration.lookWhileTypingTerminalNavigationMode.w3m%",
             "%configuration.lookWhileTypingTerminalNavigationMode.scrollback%",
             "%configuration.lookWhileTypingTerminalNavigationMode.cursorKeys%",
             "%configuration.lookWhileTypingTerminalNavigationMode.applicationCursorKeys%",
             "%configuration.lookWhileTypingTerminalNavigationMode.pageKeys%"
           ],
-          "default": "scrollback",
+          "default": "w3m",
           "description": "%configuration.lookWhileTypingTerminalNavigationMode%"
         }
       }

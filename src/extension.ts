@@ -150,6 +150,7 @@ function getLookWhileTypingTerminalNavigationMode() {
             'vscodePluginSwimming.lookWhileTypingTerminalNavigationMode'
         );
     switch (configuredMode) {
+        case 'w3m':
         case 'cursorKeys':
         case 'applicationCursorKeys':
         case 'pageKeys':
@@ -157,7 +158,7 @@ function getLookWhileTypingTerminalNavigationMode() {
             return configuredMode;
 
         default:
-            return 'scrollback';
+            return 'w3m';
     }
 }
 
