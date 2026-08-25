@@ -1,7 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { getLookWhileTypingTerminalScrollCommand } = require('../out/lookWhileTyping');
+const {
+    getLookWhileTypingTerminalInputSequence,
+    getLookWhileTypingTerminalScrollCommand,
+} = require('../out/lookWhileTyping');
 
 test('maps Look While Typing terminal scrolling to VS Code terminal commands', () => {
     assert.equal(
@@ -11,5 +14,20 @@ test('maps Look While Typing terminal scrolling to VS Code terminal commands', (
     assert.equal(
         getLookWhileTypingTerminalScrollCommand(1),
         'workbench.action.terminal.scrollDown'
+    );
+});
+
+test('maps terminal cursor and page navigation in the requested direction', () => {
+    assert.equal(
+        getLookWhileTypingTerminalInputSequence(-1, 'cursorKeys', 2),
+        '\x1b[A\x1b[A'
+    );
+    assert.equal(
+        getLookWhileTypingTerminalInputSequence(1, 'applicationCursorKeys', 2),
+        '\x1bOB\x1bOB'
+    );
+    assert.equal(
+        getLookWhileTypingTerminalInputSequence(-1, 'pageKeys', 5),
+        '\x1b[5~'
     );
 });

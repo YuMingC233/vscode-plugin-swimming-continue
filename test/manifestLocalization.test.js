@@ -109,6 +109,21 @@ test('offers line and cursor Look While Typing scroll modes', () => {
     assert.equal(scrollMode.default, 'line');
 });
 
+test('offers general terminal navigation modes', () => {
+    const configuration = packageJson.contributes.configuration.properties;
+    const terminalNavigationMode = configuration[
+        'vscodePluginSwimming.lookWhileTypingTerminalNavigationMode'
+    ];
+
+    assert.deepEqual(terminalNavigationMode.enum, [
+        'scrollback',
+        'cursorKeys',
+        'applicationCursorKeys',
+        'pageKeys',
+    ]);
+    assert.equal(terminalNavigationMode.default, 'scrollback');
+});
+
 test('documents the complete local VSIX packaging and installation workflow', () => {
     const readme = fs.readFileSync(path.join(projectRoot, 'README.md'), 'utf8');
 

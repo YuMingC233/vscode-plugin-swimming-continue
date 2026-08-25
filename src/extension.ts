@@ -38,9 +38,11 @@ import {
     getLookWhileTypingRenamedDocumentUri,
     getLookWhileTypingCursorScrollPosition,
     getLookWhileTypingScrollLine,
-    getLookWhileTypingTargetLabel,
+    getLookWhileTypingTerminalInputSequence,
     getLookWhileTypingTerminalScrollCommand,
+    getLookWhileTypingTargetLabel,
     isLookWhileTypingTarget,
+    LookWhileTypingTerminalNavigationMode,
 } from './lookWhileTyping';
 import {
     createHumanRewritePlan,
@@ -139,6 +141,24 @@ function getLookWhileTypingScrollMode() {
         .get<string>('vscodePluginSwimming.lookWhileTypingScrollMode');
 
     return configuredMode === 'cursor' ? 'cursor' : 'line';
+}
+
+function getLookWhileTypingTerminalNavigationMode() {
+    const configuredMode = workspace
+        .getConfiguration()
+        .get<LookWhileTypingTerminalNavigationMode>(
+            'vscodePluginSwimming.lookWhileTypingTerminalNavigationMode'
+        );
+    switch (configuredMode) {
+        case 'cursorKeys':
+        case 'applicationCursorKeys':
+        case 'pageKeys':
+        case 'scrollback':
+            return configuredMode;
+
+        default:
+            return 'scrollback';
+    }
 }
 
 function getLookWhileTypingControlKey(
@@ -555,9 +575,21 @@ async function scrollLookWhileTypingTerminal(direction: -1 | 1) {
     }
 
     targetTerminal.show(true);
-    await commands.executeCommand(
-        getLookWhileTypingTerminalScrollCommand(direction)
+    const mode = getLookWhileTypingTerminalNavigationMode();
+
+    if (mode === 'scrollback') {
+        await commands.executeCommand(
+            getLookWhileTypingTerminalScrollCommand(direction)
+        );
+        return;
+    }
+    const sequence = getLookWhileTypingTerminalInputSequence(
+        direction,
+        mode,
+        getLookWhileTypingStepLines()
     );
+
+    targetTerminal.sendText(sequence, false);
 }
 
 async function scrollLookWhileTypingTarget(direction: -1 | 1) {

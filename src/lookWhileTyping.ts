@@ -23,6 +23,12 @@ export type LookWhileTypingControls = {
     reopenTargetKey: string;
 };
 
+export type LookWhileTypingTerminalNavigationMode =
+    | 'scrollback'
+    | 'cursorKeys'
+    | 'applicationCursorKeys'
+    | 'pageKeys';
+
 export type LookWhileTypingAction = 'scrollUp' | 'scrollDown' | 'closeTarget' | 'reopenTarget';
 
 export function getLookWhileTypingTerminalScrollCommand(direction: -1 | 1) {
@@ -182,4 +188,21 @@ export function getLookWhileTypingCursorScrollPosition({
         return { line: firstVisibleLine, character: firstVisibleCharacter };
     }
     return { line: targetLine, character: 0 };
+}
+
+export function getLookWhileTypingTerminalInputSequence(
+    direction: -1 | 1,
+    mode: Exclude<LookWhileTypingTerminalNavigationMode, 'scrollback'>,
+    stepLines: number
+) {
+    const repeatCount = Math.max(1, Math.floor(stepLines));
+
+    switch (mode) {
+        case 'cursorKeys':
+            return (direction < 0 ? '\x1b[A' : '\x1b[B').repeat(repeatCount);
+        case 'applicationCursorKeys':
+            return (direction < 0 ? '\x1bOA' : '\x1bOB').repeat(repeatCount);
+        case 'pageKeys':
+            return direction < 0 ? '\x1b[5~' : '\x1b[6~';
+    }
 }

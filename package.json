@@ -269,6 +269,23 @@
           "maxLength": 1,
           "default": "`",
           "description": "%configuration.lookWhileTypingReopenTargetKey%"
+        },
+        "vscodePluginSwimming.lookWhileTypingTerminalNavigationMode": {
+          "type": "string",
+          "enum": [
+            "scrollback",
+            "cursorKeys",
+            "applicationCursorKeys",
+            "pageKeys"
+          ],
+          "enumDescriptions": [
+            "%configuration.lookWhileTypingTerminalNavigationMode.scrollback%",
+            "%configuration.lookWhileTypingTerminalNavigationMode.cursorKeys%",
+            "%configuration.lookWhileTypingTerminalNavigationMode.applicationCursorKeys%",
+            "%configuration.lookWhileTypingTerminalNavigationMode.pageKeys%"
+          ],
+          "default": "scrollback",
+          "description": "%configuration.lookWhileTypingTerminalNavigationMode%"
         }
       }
     }
