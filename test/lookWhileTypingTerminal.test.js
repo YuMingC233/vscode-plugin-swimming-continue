@@ -2,8 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+    getLookWhileTypingCoverTransition,
     getLookWhileTypingCloseTargetKind,
     getLookWhileTypingInputTokens,
+    getLookWhileTypingRestoreTransition,
+    getLookWhileTypingTargetKind,
     getLookWhileTypingTerminalInputSequence,
     getLookWhileTypingTerminalScrollCommand,
 } = require('../out/lookWhileTyping');
@@ -65,4 +68,17 @@ test('closes terminal targets even when they are displayed as editor tabs', () =
     assert.equal(getLookWhileTypingCloseTargetKind(false, true), 'terminal');
     assert.equal(getLookWhileTypingCloseTargetKind(true, false), 'editor');
     assert.equal(getLookWhileTypingCloseTargetKind(false, false), undefined);
+});
+
+test('switches terminal scrolling to a cover editor and restores terminal routing', () => {
+    assert.equal(getLookWhileTypingTargetKind(false, true), 'terminal');
+    assert.deepEqual(getLookWhileTypingCoverTransition('terminal'), {
+        activeTargetKind: 'editor',
+        hiddenTargetKind: 'terminal',
+    });
+    assert.deepEqual(getLookWhileTypingRestoreTransition('terminal'), {
+        activeTargetKind: 'terminal',
+        hiddenTargetKind: undefined,
+    });
+    assert.equal(getLookWhileTypingTargetKind(true, false), 'editor');
 });

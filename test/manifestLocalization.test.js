@@ -35,6 +35,17 @@ test('puts all editor context commands inside one Swimming submenu', () => {
     assert.ok(packageJson.contributes.menus['swimming.menu'].length > 0);
 });
 
+test('contributes the Look While Typing cover editor command to the Swimming submenu', () => {
+    const command = 'extension.swimming.selectLookWhileTypingCoverEditor';
+
+    assert.ok(packageJson.contributes.commands.some((item) => item.command === command));
+    assert.ok(
+        packageJson.contributes.menus['swimming.menu'].some((item) => {
+            return item.command === command;
+        })
+    );
+});
+
 test('localizes every manifest label in English and Simplified Chinese', () => {
     const labels = [
         packageJson.displayName,

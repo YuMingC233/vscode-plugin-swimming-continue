@@ -9,6 +9,7 @@
   "command.switchWriteMode": "Switch Write Mode",
   "command.exitShadowRewrite": "Exit Shadow Rewriting",
   "command.selectLookWhileTypingTarget": "Look While Typing: Select Working Editor",
+  "command.selectLookWhileTypingCoverEditor": "Look While Typing: Select Cover Editor",
   "command.clearLookWhileTypingTarget": "Look While Typing: Clear Working Editor",
   "command.scrollLookWhileTypingUp": "Look While Typing: Scroll Working Editor Up",
   "command.scrollLookWhileTypingDown": "Look While Typing: Scroll Working Editor Down",

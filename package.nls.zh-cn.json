@@ -9,6 +9,7 @@
   "command.switchWriteMode": "切换重写模式",
   "command.exitShadowRewrite": "退出影子重写",
   "command.selectLookWhileTypingTarget": "边打边看：选择工作编辑器",
+  "command.selectLookWhileTypingCoverEditor": "边打边看：选择遮挡编辑器",
   "command.clearLookWhileTypingTarget": "边打边看：清除工作编辑器",
   "command.scrollLookWhileTypingUp": "边打边看：向上滚动工作编辑器",
   "command.scrollLookWhileTypingDown": "边打边看：向下滚动工作编辑器",

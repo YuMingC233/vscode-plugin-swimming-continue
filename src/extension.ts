@@ -11,6 +11,8 @@ import {
     Position,
     Range,
     Selection,
+    TabGroup,
+    TabInputTerminal,
     TabInputText,
     Terminal,
     TextEditor,
@@ -34,15 +36,18 @@ import {
 } from './shadowInline';
 import {
     getLookWhileTypingAction,
+    getLookWhileTypingCoverTransition,
     getLookWhileTypingCloseTargetKind,
     getLookWhileTypingInputTokens,
     getLookWhileTypingLabelPattern,
     getLookWhileTypingRenamedDocumentUri,
+    getLookWhileTypingRestoreTransition,
     getLookWhileTypingCursorScrollPosition,
     getLookWhileTypingScrollLine,
     getLookWhileTypingTerminalInputSequence,
     getLookWhileTypingTerminalScrollCommand,
     getLookWhileTypingTargetLabel,
+    getLookWhileTypingTargetKind,
     isLookWhileTypingTarget,
     LookWhileTypingTerminalNavigationMode,
 } from './lookWhileTyping';
@@ -66,7 +71,11 @@ const LOOK_WHILE_TYPING_CLOSED_TARGET_CONTEXT = 'vscodePluginSwimming.lookWhileT
 const LOOK_WHILE_TYPING_TARGET_STATE_KEY = 'lookWhileTyping.target';
 const LOOK_WHILE_TYPING_CLOSED_TARGET_STATE_KEY = 'lookWhileTyping.closedTarget';
 const LOOK_WHILE_TYPING_TERMINAL_STATE_KEY = 'lookWhileTyping.terminalName';
+const LOOK_WHILE_TYPING_COVER_TARGET_STATE_KEY = 'lookWhileTyping.coverTarget';
+const LOOK_WHILE_TYPING_HIDDEN_TARGET_STATE_KEY = 'lookWhileTyping.hiddenTarget';
+const LOOK_WHILE_TYPING_HIDDEN_TERMINAL_STATE_KEY = 'lookWhileTyping.hiddenTerminalName';
 const LOOK_WHILE_TYPING_SELECT_TARGET_COMMAND = 'extension.swimming.selectLookWhileTypingTarget';
+const LOOK_WHILE_TYPING_SELECT_COVER_COMMAND = 'extension.swimming.selectLookWhileTypingCoverEditor';
 const LOOK_WHILE_TYPING_CLEAR_TARGET_COMMAND = 'extension.swimming.clearLookWhileTypingTarget';
 const LOOK_WHILE_TYPING_SCROLL_UP_COMMAND = 'extension.swimming.scrollLookWhileTypingUp';
 const LOOK_WHILE_TYPING_SCROLL_DOWN_COMMAND = 'extension.swimming.scrollLookWhileTypingDown';
@@ -225,6 +234,10 @@ let lookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let lastClosedLookWhileTypingTarget: LookWhileTypingTarget | undefined;
 let lookWhileTypingTerminal: Terminal | undefined;
 let lookWhileTypingTerminalName: string | undefined;
+let lookWhileTypingCoverTarget: LookWhileTypingTarget | undefined;
+let hiddenLookWhileTypingTarget: LookWhileTypingTarget | undefined;
+let hiddenLookWhileTypingTerminal: Terminal | undefined;
+let hiddenLookWhileTypingTerminalName: string | undefined;
 let inlineSuggestionRefreshTimer: NodeJS.Timeout | undefined;
 let shadowRoundRobinOrder: string[] = [];
 let shadowRoundRobinIndex = 0;
@@ -265,12 +278,86 @@ function getLookWhileTypingTargetTerminal() {
     return lookWhileTypingTerminal;
 }
 
+function getHiddenLookWhileTypingTerminal() {
+    if (
+        hiddenLookWhileTypingTerminal
+        && window.terminals.includes(hiddenLookWhileTypingTerminal)
+    ) {
+        return hiddenLookWhileTypingTerminal;
+    }
+    hiddenLookWhileTypingTerminal = window.terminals.find((terminal) => {
+        return terminal.name === hiddenLookWhileTypingTerminalName;
+    });
+    return hiddenLookWhileTypingTerminal;
+}
+
+function clearHiddenLookWhileTypingTarget() {
+    hiddenLookWhileTypingTarget = undefined;
+    hiddenLookWhileTypingTerminal = undefined;
+    hiddenLookWhileTypingTerminalName = undefined;
+}
+
+function getLookWhileTypingTargetTabGroup(): TabGroup | undefined {
+    if (lookWhileTypingTarget) {
+        return window.tabGroups.all.find((tabGroup) => {
+            return tabGroup.viewColumn === lookWhileTypingTarget?.viewColumn;
+        });
+    }
+
+    const targetTerminal = getLookWhileTypingTargetTerminal();
+    if (!targetTerminal) {
+        return undefined;
+    }
+
+    const terminalGroups = window.tabGroups.all.filter((tabGroup) => {
+        return tabGroup.tabs.some((tab) => tab.input instanceof TabInputTerminal);
+    });
+    const targetGroups = terminalGroups.filter((tabGroup) => {
+        return tabGroup.tabs.some((tab) => {
+            return tab.input instanceof TabInputTerminal
+                && tab.label === targetTerminal.name;
+        });
+    });
+
+    return targetGroups.find((tabGroup) => {
+        return tabGroup.isActive;
+    }) ?? targetGroups[0] ?? terminalGroups[0];
+}
+
+function getLookWhileTypingCoverCandidates() {
+    const target = lookWhileTypingTarget;
+    const coveredDocumentUris = new Set<string>();
+
+    return window.tabGroups.all.flatMap((tabGroup) => {
+        return tabGroup.tabs.flatMap((tab) => {
+            if (!(tab.input instanceof TabInputText)) {
+                return [];
+            }
+
+            const documentUri = tab.input.uri.toString();
+            if (
+                coveredDocumentUris.has(documentUri)
+                || (target && isLookWhileTypingTarget({
+                    documentUri,
+                    viewColumn: tabGroup.viewColumn,
+                }, target))
+            ) {
+                return [];
+            }
+
+            coveredDocumentUris.add(documentUri);
+            return [{ tab, tabGroup }];
+        });
+    });
+}
+
 function updateLookWhileTypingContext() {
     const targetEditor = getLookWhileTypingTargetEditor();
+    const targetTerminal = getLookWhileTypingTargetTerminal();
     void commands.executeCommand(
         'setContext',
         LOOK_WHILE_TYPING_CONTEXT,
-        Boolean(targetEditor || getLookWhileTypingTargetTerminal())
+        Boolean(targetEditor || targetTerminal)
     );
     void commands.executeCommand(
         'setContext',
@@ -280,7 +367,11 @@ function updateLookWhileTypingContext() {
     void commands.executeCommand(
         'setContext',
         LOOK_WHILE_TYPING_CLOSED_TARGET_CONTEXT,
-        Boolean(lastClosedLookWhileTypingTarget)
+        Boolean(
+            lastClosedLookWhileTypingTarget
+            || hiddenLookWhileTypingTarget
+            || getHiddenLookWhileTypingTerminal()
+        )
     );
 }
 
@@ -296,6 +387,18 @@ async function persistLookWhileTypingTargets(context: ExtensionContext) {
     await context.workspaceState.update(
         LOOK_WHILE_TYPING_TERMINAL_STATE_KEY,
         lookWhileTypingTerminalName
+    );
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_COVER_TARGET_STATE_KEY,
+        lookWhileTypingCoverTarget
+    );
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_HIDDEN_TARGET_STATE_KEY,
+        hiddenLookWhileTypingTarget
+    );
+    await context.workspaceState.update(
+        LOOK_WHILE_TYPING_HIDDEN_TERMINAL_STATE_KEY,
+        hiddenLookWhileTypingTerminalName
     );
 }
 
@@ -400,7 +503,12 @@ async function updateLookWhileTypingTargetAfterWorkspaceRename(
             newUri: newUri.toString(),
         };
     });
-    const targets = [lookWhileTypingTarget, lastClosedLookWhileTypingTarget]
+    const targets = [
+        lookWhileTypingTarget,
+        lastClosedLookWhileTypingTarget,
+        lookWhileTypingCoverTarget,
+        hiddenLookWhileTypingTarget,
+    ]
         .filter((target): target is LookWhileTypingTarget => Boolean(target));
     let hasUpdatedTarget = false;
 
@@ -483,6 +591,10 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
     if (lastClosedLookWhileTypingTarget) {
         await restoreLookWhileTypingCustomLabel(lastClosedLookWhileTypingTarget);
     }
+    if (hiddenLookWhileTypingTarget) {
+        await restoreLookWhileTypingCustomLabel(hiddenLookWhileTypingTarget);
+    }
+    clearHiddenLookWhileTypingTarget();
     if (selectedTarget.targetType === 'terminal') {
         lookWhileTypingTarget = undefined;
         lastClosedLookWhileTypingTarget = undefined;
@@ -505,14 +617,72 @@ async function selectLookWhileTypingTarget(context: ExtensionContext) {
     return window.showInformationMessage(l10n.t('Look While Typing target selected.'));
 }
 
+async function selectLookWhileTypingCoverEditor(context: ExtensionContext) {
+    const targetKind = getLookWhileTypingTargetKind(
+        Boolean(getLookWhileTypingTargetEditor()),
+        Boolean(getLookWhileTypingTargetTerminal())
+    );
+    if (!targetKind) {
+        return window.showInformationMessage(
+            l10n.t('Select a Look While Typing target before choosing a cover editor.')
+        );
+    }
+    if (hiddenLookWhileTypingTarget || getHiddenLookWhileTypingTerminal()) {
+        return window.showInformationMessage(
+            l10n.t('Restore the hidden Look While Typing target before choosing another cover editor.')
+        );
+    }
+
+    const candidates = getLookWhileTypingCoverCandidates();
+    if (!candidates.length) {
+        return window.showWarningMessage(
+            l10n.t('Open a text editor before choosing it as the cover editor.')
+        );
+    }
+
+    const selectedCandidate = await window.showQuickPick(
+        candidates.map(({ tab, tabGroup }) => {
+            const input = tab.input as TabInputText;
+            const relativePath = workspace.asRelativePath(input.uri, false);
+            return {
+                label: tab.label,
+                description: l10n.t(
+                    '{0} (Editor group {1})',
+                    relativePath,
+                    tabGroup.viewColumn ?? l10n.t('unknown')
+                ),
+                documentUri: input.uri.toString(),
+                viewColumn: tabGroup.viewColumn,
+            };
+        }),
+        {
+            placeHolder: l10n.t('Select the editor to display when the working target is hidden.'),
+        }
+    );
+    if (!selectedCandidate) {
+        return;
+    }
+
+    lookWhileTypingCoverTarget = {
+        documentUri: selectedCandidate.documentUri,
+        viewColumn: selectedCandidate.viewColumn,
+    };
+    await persistLookWhileTypingTargets(context);
+    return window.showInformationMessage(l10n.t('Look While Typing cover editor selected.'));
+}
+
 async function clearLookWhileTypingTarget(context: ExtensionContext) {
     if (lookWhileTypingTarget) {
         await restoreLookWhileTypingCustomLabel(lookWhileTypingTarget);
+    }
+    if (hiddenLookWhileTypingTarget) {
+        await restoreLookWhileTypingCustomLabel(hiddenLookWhileTypingTarget);
     }
     lookWhileTypingTarget = undefined;
     lastClosedLookWhileTypingTarget = undefined;
     lookWhileTypingTerminal = undefined;
     lookWhileTypingTerminalName = undefined;
+    clearHiddenLookWhileTypingTarget();
     await persistLookWhileTypingTargets(context);
     updateLookWhileTypingContext();
 }
@@ -596,11 +766,17 @@ async function scrollLookWhileTypingTerminal(direction: -1 | 1) {
 }
 
 async function scrollLookWhileTypingTarget(direction: -1 | 1) {
-    if (getLookWhileTypingTargetTerminal()) {
+    const targetKind = getLookWhileTypingTargetKind(
+        Boolean(getLookWhileTypingTargetEditor()),
+        Boolean(getLookWhileTypingTargetTerminal())
+    );
+    if (targetKind === 'terminal') {
         await scrollLookWhileTypingTerminal(direction);
         return;
     }
-    scrollLookWhileTyping(direction);
+    if (targetKind === 'editor') {
+        scrollLookWhileTyping(direction);
+    }
 }
 
 function getLookWhileTypingTargetTab() {
@@ -623,6 +799,68 @@ function getLookWhileTypingTargetTab() {
             viewColumn: tab.group.viewColumn,
         }, target);
     });
+}
+
+async function hideLookWhileTypingTargetWithCover(context: ExtensionContext) {
+    const coverTarget = lookWhileTypingCoverTarget;
+    const activeTarget = lookWhileTypingTarget;
+    const targetEditor = getLookWhileTypingTargetEditor();
+    const targetTerminal = getLookWhileTypingTargetTerminal();
+    const targetKind = getLookWhileTypingTargetKind(
+        Boolean(targetEditor),
+        Boolean(targetTerminal)
+    );
+    if (!coverTarget || !targetKind) {
+        return false;
+    }
+    if (hiddenLookWhileTypingTarget || getHiddenLookWhileTypingTerminal()) {
+        return true;
+    }
+
+    const targetTabGroup = getLookWhileTypingTargetTabGroup();
+    if (!targetTabGroup) {
+        await window.showWarningMessage(
+            l10n.t('The working target must be displayed in an editor group before it can be covered.')
+        );
+        return true;
+    }
+
+    try {
+        const coverEditor = await window.showTextDocument(
+            Uri.parse(coverTarget.documentUri),
+            {
+                viewColumn: targetTabGroup.viewColumn,
+                preserveFocus: true,
+                preview: false,
+            }
+        );
+        const transition = getLookWhileTypingCoverTransition(targetKind);
+        lookWhileTypingCoverTarget = {
+            ...coverTarget,
+            viewColumn: coverEditor.viewColumn,
+        };
+        lookWhileTypingTarget = lookWhileTypingCoverTarget;
+        lookWhileTypingTerminal = undefined;
+        lookWhileTypingTerminalName = undefined;
+
+        if (transition.hiddenTargetKind === 'terminal') {
+            hiddenLookWhileTypingTarget = undefined;
+            hiddenLookWhileTypingTerminal = targetTerminal;
+            hiddenLookWhileTypingTerminalName = targetTerminal?.name;
+        } else {
+            hiddenLookWhileTypingTarget = activeTarget;
+            hiddenLookWhileTypingTerminal = undefined;
+            hiddenLookWhileTypingTerminalName = undefined;
+        }
+        await persistLookWhileTypingTargets(context);
+        updateLookWhileTypingContext();
+        return true;
+    } catch {
+        await window.showWarningMessage(
+            l10n.t('The selected cover editor could not be opened.')
+        );
+        return true;
+    }
 }
 
 async function closeLookWhileTypingTarget(context: ExtensionContext) {
@@ -656,7 +894,68 @@ async function closeLookWhileTypingTerminal(context: ExtensionContext) {
     updateLookWhileTypingContext();
 }
 
+async function closeOrHideLookWhileTypingTarget(context: ExtensionContext) {
+    if (lookWhileTypingCoverTarget) {
+        await hideLookWhileTypingTargetWithCover(context);
+        return;
+    }
+
+    const closeTargetKind = getLookWhileTypingCloseTargetKind(
+        Boolean(getLookWhileTypingTargetEditor()),
+        Boolean(getLookWhileTypingTargetTerminal())
+    );
+    if (closeTargetKind === 'terminal') {
+        await closeLookWhileTypingTerminal(context);
+    } else if (closeTargetKind === 'editor') {
+        await closeLookWhileTypingTarget(context);
+    }
+}
+
 async function reopenLookWhileTypingTarget(context: ExtensionContext) {
+    const hiddenTerminal = getHiddenLookWhileTypingTerminal();
+    if (hiddenTerminal) {
+        const transition = getLookWhileTypingRestoreTransition('terminal');
+        hiddenTerminal.show(true);
+        if (transition.activeTargetKind === 'terminal') {
+            lookWhileTypingTarget = undefined;
+            lookWhileTypingTerminal = hiddenTerminal;
+            lookWhileTypingTerminalName = hiddenTerminal.name;
+        }
+        clearHiddenLookWhileTypingTarget();
+        await persistLookWhileTypingTargets(context);
+        updateLookWhileTypingContext();
+        return;
+    }
+
+    const hiddenTarget = hiddenLookWhileTypingTarget;
+    if (hiddenTarget) {
+        try {
+            const hiddenTextEditor = await window.showTextDocument(
+                Uri.parse(hiddenTarget.documentUri),
+                {
+                    viewColumn: hiddenTarget.viewColumn,
+                    preserveFocus: true,
+                    preview: false,
+                }
+            );
+            const transition = getLookWhileTypingRestoreTransition('editor');
+            if (transition.activeTargetKind === 'editor') {
+                hiddenTarget.viewColumn = hiddenTextEditor.viewColumn;
+                lookWhileTypingTarget = hiddenTarget;
+                lookWhileTypingTerminal = undefined;
+                lookWhileTypingTerminalName = undefined;
+            }
+            clearHiddenLookWhileTypingTarget();
+            await persistLookWhileTypingTargets(context);
+            updateLookWhileTypingContext();
+            return;
+        } catch {
+            return window.showWarningMessage(
+                l10n.t('The hidden Look While Typing target could not be restored.')
+            );
+        }
+    }
+
     const target = lastClosedLookWhileTypingTarget;
     if (!target) {
         return window.showInformationMessage(l10n.t('No closed Look While Typing target to reopen.'));
@@ -733,18 +1032,8 @@ async function handleLookWhileTypingAction(
         return true;
     }
     if (action === 'closeTarget') {
-        const closeTargetKind = getLookWhileTypingCloseTargetKind(
-            Boolean(targetEditor),
-            Boolean(targetTerminal)
-        );
-        if (closeTargetKind === 'terminal') {
-            await closeLookWhileTypingTerminal(context);
-            return true;
-        }
-        if (closeTargetKind === 'editor') {
-            await closeLookWhileTypingTarget(context);
-            return true;
-        }
+        await closeOrHideLookWhileTypingTarget(context);
+        return true;
     }
 
     return false;
@@ -1830,6 +2119,18 @@ export function activate(context: ExtensionContext) {
     lookWhileTypingTerminal = window.terminals.find((terminal) => {
         return terminal.name === lookWhileTypingTerminalName;
     });
+    lookWhileTypingCoverTarget = context.workspaceState.get<LookWhileTypingTarget>(
+        LOOK_WHILE_TYPING_COVER_TARGET_STATE_KEY
+    );
+    hiddenLookWhileTypingTarget = context.workspaceState.get<LookWhileTypingTarget>(
+        LOOK_WHILE_TYPING_HIDDEN_TARGET_STATE_KEY
+    );
+    hiddenLookWhileTypingTerminalName = context.workspaceState.get<string>(
+        LOOK_WHILE_TYPING_HIDDEN_TERMINAL_STATE_KEY
+    );
+    hiddenLookWhileTypingTerminal = window.terminals.find((terminal) => {
+        return terminal.name === hiddenLookWhileTypingTerminalName;
+    });
     updateShadowContext();
     updateLookWhileTypingContext();
 
@@ -1838,9 +2139,17 @@ export function activate(context: ExtensionContext) {
         window.onDidChangeVisibleTextEditors(updateLookWhileTypingContext),
         window.onDidOpenTerminal(updateLookWhileTypingContext),
         window.onDidCloseTerminal((terminal) => {
+            let hasChanged = false;
             if (terminal === lookWhileTypingTerminal) {
                 lookWhileTypingTerminal = undefined;
                 lookWhileTypingTerminalName = undefined;
+                hasChanged = true;
+            }
+            if (terminal === hiddenLookWhileTypingTerminal) {
+                clearHiddenLookWhileTypingTarget();
+                hasChanged = true;
+            }
+            if (hasChanged) {
                 void persistLookWhileTypingTargets(context);
             }
             updateLookWhileTypingContext();
@@ -1863,6 +2172,10 @@ export function activate(context: ExtensionContext) {
             () => selectLookWhileTypingTarget(context)
         ),
         commands.registerCommand(
+            LOOK_WHILE_TYPING_SELECT_COVER_COMMAND,
+            () => selectLookWhileTypingCoverEditor(context)
+        ),
+        commands.registerCommand(
             LOOK_WHILE_TYPING_CLEAR_TARGET_COMMAND,
             () => clearLookWhileTypingTarget(context)
         ),
@@ -1876,7 +2189,7 @@ export function activate(context: ExtensionContext) {
         ),
         commands.registerCommand(
             LOOK_WHILE_TYPING_CLOSE_TARGET_COMMAND,
-            () => closeLookWhileTypingTarget(context)
+            () => closeOrHideLookWhileTypingTarget(context)
         ),
         commands.registerCommand(
             LOOK_WHILE_TYPING_REOPEN_TARGET_COMMAND,

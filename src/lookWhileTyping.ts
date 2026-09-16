@@ -38,15 +38,46 @@ export type LookWhileTypingInputToken = {
 };
 
 export type LookWhileTypingCloseTargetKind = 'editor' | 'terminal';
+export type LookWhileTypingTargetKind = 'editor' | 'terminal';
+
+export type LookWhileTypingCoverTransition = {
+    activeTargetKind: LookWhileTypingTargetKind;
+    hiddenTargetKind: LookWhileTypingTargetKind | undefined;
+};
+
+export function getLookWhileTypingTargetKind(
+    hasEditorTarget: boolean,
+    hasTerminalTarget: boolean
+): LookWhileTypingTargetKind | undefined {
+    if (hasTerminalTarget) {
+        return 'terminal';
+    }
+    return hasEditorTarget ? 'editor' : undefined;
+}
+
+export function getLookWhileTypingCoverTransition(
+    targetKind: LookWhileTypingTargetKind
+): LookWhileTypingCoverTransition {
+    return {
+        activeTargetKind: 'editor',
+        hiddenTargetKind: targetKind,
+    };
+}
+
+export function getLookWhileTypingRestoreTransition(
+    hiddenTargetKind: LookWhileTypingTargetKind
+): LookWhileTypingCoverTransition {
+    return {
+        activeTargetKind: hiddenTargetKind,
+        hiddenTargetKind: undefined,
+    };
+}
 
 export function getLookWhileTypingCloseTargetKind(
     hasEditorTarget: boolean,
     hasTerminalTarget: boolean
 ): LookWhileTypingCloseTargetKind | undefined {
-    if (hasTerminalTarget) {
-        return 'terminal';
-    }
-    return hasEditorTarget ? 'editor' : undefined;
+    return getLookWhileTypingTargetKind(hasEditorTarget, hasTerminalTarget);
 }
 
 export function getLookWhileTypingTerminalScrollCommand(direction: -1 | 1) {
